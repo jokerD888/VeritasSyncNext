@@ -1,0 +1,9 @@
+# The pinned libwebrtc source and the GN arguments used to produce the artifact
+# consumed by VERITASSYNC_ENABLE_WEBRTC. Do not replace this with a moving branch.
+upstream = "https://webrtc.googlesource.com/src.git"
+commit = "4c1bdface8d17472333485e588be6028c639665a"
+ref_at_lock_time = "refs/heads/lkgr"
+
+# Engine has no media tracks. The resulting artifact must expose the documented
+# PeerConnection/DataChannel API only; engine source never includes internal headers.
+gn_args = "is_debug=false is_component_build=false rtc_include_tests=false rtc_build_examples=false rtc_enable_protobuf=false"

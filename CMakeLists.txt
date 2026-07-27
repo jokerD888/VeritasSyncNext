@@ -3,6 +3,9 @@ cmake_minimum_required(VERSION 3.25)
 project(VeritasSyncNext VERSION 0.1.0 LANGUAGES CXX)
 
 option(VERITASSYNC_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
+option(VERITASSYNC_ENABLE_WEBRTC "Enable the pinned libwebrtc adapter" OFF)
+set(VERITASSYNC_WEBRTC_ROOT "" CACHE PATH "Pinned libwebrtc source checkout")
+set(VERITASSYNC_WEBRTC_LIBRARY "" CACHE FILEPATH "libwebrtc static library built from the pinned checkout")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,12 +31,27 @@ add_library(veritassync_engine
   engine/common/protocol.cpp
   engine/storage/database.cpp
   engine/transport/mock_transport.cpp
+  engine/transport/connection_state.cpp
+  engine/signaling/tracker_contract.cpp
   engine/sync/phase0_node.cpp
 )
 target_include_directories(veritassync_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(veritassync_engine PUBLIC unofficial::sqlite3::sqlite3)
 
 veritassync_apply_warnings(veritassync_engine)
+
+if(VERITASSYNC_ENABLE_WEBRTC)
+  if(NOT EXISTS "${VERITASSYNC_WEBRTC_ROOT}/api/peer_connection_interface.h")
+    message(FATAL_ERROR "VERITASSYNC_WEBRTC_ROOT must be a libwebrtc checkout pinned by third_party/libwebrtc.lock")
+  endif()
+  if(NOT EXISTS "${VERITASSYNC_WEBRTC_LIBRARY}")
+    message(FATAL_ERROR "VERITASSYNC_WEBRTC_LIBRARY must name the libwebrtc artifact from the pinned checkout")
+  endif()
+  target_sources(veritassync_engine PRIVATE engine/transport/libwebrtc_build_probe.cpp)
+  target_include_directories(veritassync_engine PRIVATE "${VERITASSYNC_WEBRTC_ROOT}")
+  target_link_libraries(veritassync_engine PRIVATE "${VERITASSYNC_WEBRTC_LIBRARY}")
+  target_compile_definitions(veritassync_engine PRIVATE VERITASSYNC_WITH_WEBRTC=1)
+endif()
 
 add_executable(veritassync-engine engine/app/main.cpp)
 target_link_libraries(veritassync-engine PRIVATE veritassync_engine)
@@ -46,6 +64,8 @@ if(BUILD_TESTING)
     tests/protocol_test.cpp
     tests/database_test.cpp
     tests/mock_sync_test.cpp
+    tests/connection_state_test.cpp
+    tests/tracker_contract_test.cpp
   )
   target_link_libraries(veritassync_tests PRIVATE veritassync_engine)
   veritassync_apply_warnings(veritassync_tests)

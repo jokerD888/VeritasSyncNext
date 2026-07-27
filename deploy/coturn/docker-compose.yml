@@ -1,0 +1,14 @@
+services:
+  coturn:
+    image: coturn/coturn:4.6.3
+    entrypoint: ["/bin/sh", "/etc/coturn/start.sh"]
+    environment:
+      TURN_SHARED_SECRET: ${TURN_SHARED_SECRET:?set a development-only secret in your environment}
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./start.sh:/etc/coturn/start.sh:ro
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "5349:5349/tcp"
+      - "49160-49200:49160-49200/udp"
