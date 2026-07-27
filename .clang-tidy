@@ -1,0 +1,10 @@
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  portability-*
+HeaderFilterRegex: '^(engine|tests)/'
+FormatStyle: file
