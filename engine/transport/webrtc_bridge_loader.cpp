@@ -11,6 +11,7 @@ using AbiVersionFunction = std::uint32_t(__cdecl*)();
 using MaxQueuedBytesFunction = std::uint64_t(__cdecl*)();
 using CreateFactoryFunction = void*(__cdecl*)();
 using DestroyFactoryFunction = void(__cdecl*)(void*);
+using CreateProtocolChannelsFunction = std::uint32_t(__cdecl*)(void*);
 
 template <typename Function>
 Function Lookup(HMODULE module, const char* name) {
@@ -42,8 +43,13 @@ void WebRtcBridgeLoader::VerifyFactoryLifecycle(const std::filesystem::path& lib
   try {
     const auto create_factory = Lookup<CreateFactoryFunction>(module, "VeritasSyncWebRtcBridgeCreateFactory");
     const auto destroy_factory = Lookup<DestroyFactoryFunction>(module, "VeritasSyncWebRtcBridgeDestroyFactory");
+    const auto create_protocol_channels = Lookup<CreateProtocolChannelsFunction>(module, "VeritasSyncWebRtcBridgeCreateProtocolChannels");
     void* const factory = create_factory();
     if (factory == nullptr) throw std::runtime_error("WebRTC bridge could not create a PeerConnectionFactory");
+    if (create_protocol_channels(factory) != 1U) {
+      destroy_factory(factory);
+      throw std::runtime_error("WebRTC bridge could not create control-v1 and bulk-v1 DataChannels");
+    }
     destroy_factory(factory);
     FreeLibrary(module);
   } catch (...) {

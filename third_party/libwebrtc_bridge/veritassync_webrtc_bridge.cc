@@ -11,6 +11,14 @@
 #include "rtc_base/thread.h"
 
 namespace {
+class PeerObserver final : public webrtc::PeerConnectionObserver {
+ public:
+  void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState) override {}
+  void OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface>) override {}
+  void OnIceGatheringChange(webrtc::PeerConnectionInterface::IceGatheringState) override {}
+  void OnIceCandidate(const webrtc::IceCandidate*) override {}
+};
+
 class FactoryHolder final {
  public:
   FactoryHolder() {
@@ -31,11 +39,39 @@ class FactoryHolder final {
 
   [[nodiscard]] bool Ready() const { return factory_ != nullptr; }
 
+  [[nodiscard]] bool CreateProtocolChannels() {
+    if (!Ready() || peer_connection_ != nullptr) return false;
+    webrtc::PeerConnectionInterface::RTCConfiguration configuration;
+    configuration.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
+    auto peer_connection = factory_->CreatePeerConnectionOrError(
+        configuration, webrtc::PeerConnectionDependencies(&peer_observer_));
+    if (!peer_connection.ok()) return false;
+    peer_connection_ = peer_connection.MoveValue();
+
+    webrtc::DataChannelInit control_init;
+    control_init.ordered = true;
+    auto control = peer_connection_->CreateDataChannelOrError("control-v1", &control_init);
+    if (!control.ok()) return false;
+    control_channel_ = control.MoveValue();
+
+    webrtc::DataChannelInit bulk_init;
+    bulk_init.ordered = false;
+    auto bulk = peer_connection_->CreateDataChannelOrError("bulk-v1", &bulk_init);
+    if (!bulk.ok()) return false;
+    bulk_channel_ = bulk.MoveValue();
+    return control_channel_->label() == "control-v1" && control_channel_->ordered() &&
+           bulk_channel_->label() == "bulk-v1" && !bulk_channel_->ordered();
+  }
+
  private:
   std::unique_ptr<webrtc::Thread> network_thread_;
   std::unique_ptr<webrtc::Thread> worker_thread_;
   std::unique_ptr<webrtc::Thread> signaling_thread_;
   webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory_;
+  PeerObserver peer_observer_;
+  webrtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
+  webrtc::scoped_refptr<webrtc::DataChannelInterface> control_channel_;
+  webrtc::scoped_refptr<webrtc::DataChannelInterface> bulk_channel_;
 };
 }  // namespace
 
@@ -55,4 +91,9 @@ extern "C" void* VeritasSyncWebRtcBridgeCreateFactory(void) {
 
 extern "C" void VeritasSyncWebRtcBridgeDestroyFactory(void* factory) {
   delete static_cast<FactoryHolder*>(factory);
+}
+
+extern "C" uint32_t VeritasSyncWebRtcBridgeCreateProtocolChannels(void* factory) {
+  if (factory == nullptr) return 0;
+  return static_cast<FactoryHolder*>(factory)->CreateProtocolChannels() ? 1U : 0U;
 }
