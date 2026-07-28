@@ -13,6 +13,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
+find_package(blake3 CONFIG REQUIRED)
 
 function(veritassync_apply_warnings target)
   if(MSVC)
@@ -30,8 +31,10 @@ endfunction()
 
 add_library(veritassync_engine
   engine/common/protocol.cpp
+  engine/common/content_hash.cpp
   engine/storage/database.cpp
   engine/storage/ignore_rules.cpp
+  engine/storage/manifest_scanner.cpp
   engine/storage/safe_file_writer.cpp
   engine/transport/mock_transport.cpp
   engine/transport/connection_state.cpp
@@ -41,6 +44,7 @@ add_library(veritassync_engine
 )
 target_include_directories(veritassync_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(veritassync_engine PUBLIC unofficial::sqlite3::sqlite3)
+target_link_libraries(veritassync_engine PUBLIC BLAKE3::blake3)
 if(WIN32)
   target_link_libraries(veritassync_engine PRIVATE kernel32)
 endif()
@@ -86,8 +90,10 @@ if(BUILD_TESTING)
   add_executable(veritassync_tests
     tests/test_main.cpp
     tests/protocol_test.cpp
+    tests/content_hash_test.cpp
     tests/database_test.cpp
     tests/ignore_rules_test.cpp
+    tests/manifest_scanner_test.cpp
     tests/safe_file_writer_test.cpp
     tests/mock_sync_test.cpp
     tests/connection_state_test.cpp
