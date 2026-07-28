@@ -23,12 +23,13 @@ void DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::u
   writer_.WritePartialChunk(relative_path_, offset, bytes);
   database_.MarkTransferChunkCompleted(transfer_id_, chunk_index, updated_at_ms);
 }
-void DownloadReceiver::Commit() {
+void DownloadReceiver::Commit(const std::int64_t completed_at_ms) {
   const auto completed = database_.CompletedTransferChunks(transfer_id_);
   if (completed.size() != chunk_count_) throw std::logic_error("download has missing chunks");
   for (std::uint64_t index = 0; index < chunk_count_; ++index) {
     if (completed[index] != index) throw std::logic_error("download has missing chunks");
   }
   writer_.CommitPartial(relative_path_, expected_size_, expected_hash_);
+  database_.UpdateTransferState(transfer_id_, "completed", completed_at_ms);
 }
 }  // namespace veritassync::sync

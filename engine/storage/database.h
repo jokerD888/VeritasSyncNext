@@ -68,6 +68,9 @@ class Database {
   void CreateTransfer(const TransferRecord& transfer);
   void MarkTransferChunkCompleted(const TransferId& transfer_id, std::uint64_t chunk_index,
                                   std::int64_t updated_at_ms);
+  void UpdateTransferState(const TransferId& transfer_id, std::string state,
+                           std::int64_t updated_at_ms, std::optional<std::string> error_code = std::nullopt);
+  [[nodiscard]] std::optional<std::string> TransferState(const TransferId& transfer_id) const;
   [[nodiscard]] std::vector<std::uint64_t> CompletedTransferChunks(const TransferId& transfer_id) const;
   [[nodiscard]] int SchemaVersion() const;
   [[nodiscard]] int CountRows(const std::string& table) const;

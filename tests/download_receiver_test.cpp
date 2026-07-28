@@ -18,10 +18,11 @@ VSYNC_TEST(DownloadReceiverMarksOnlyVerifiedWrittenChunksAndCommits) {
     const std::vector<std::uint8_t> first{'a','b'}, second{'c','d'};
     VSYNC_CHECK_THROWS(receiver.AcceptChunk(0, 0, first, veritassync::common::Blake3(second), 2));
     receiver.AcceptChunk(1, 2, second, veritassync::common::Blake3(second), 3);
-    VSYNC_CHECK_THROWS(receiver.Commit());
+    VSYNC_CHECK_THROWS(receiver.Commit(4));
     receiver.AcceptChunk(0, 0, first, veritassync::common::Blake3(first), 4);
-    receiver.Commit();
+    receiver.Commit(5);
     VSYNC_CHECK(std::filesystem::exists(root / "file.bin"));
+    VSYNC_CHECK(db.TransferState(id) == std::optional<std::string>{"completed"});
   }
   std::filesystem::remove_all(root); std::filesystem::remove(db_path); std::filesystem::remove(db_path.string()+"-wal"); std::filesystem::remove(db_path.string()+"-shm");
 }

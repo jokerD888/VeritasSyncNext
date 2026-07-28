@@ -17,7 +17,7 @@ class DownloadReceiver {
   void AcceptChunk(std::uint64_t chunk_index, std::uint64_t offset,
                    std::span<const std::uint8_t> bytes, const common::ContentHash& chunk_hash,
                    std::int64_t updated_at_ms);
-  void Commit();
+  void Commit(std::int64_t completed_at_ms);
 
  private:
   storage::Database& database_;
