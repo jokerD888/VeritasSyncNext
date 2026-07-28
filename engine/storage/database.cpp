@@ -194,6 +194,42 @@ std::optional<FileRecord> Database::FindFileRecord(const std::string& task_id, c
     return record;
   } catch (...) { cleanup(); throw; }
 }
+std::vector<FileRecord> Database::ListFileRecords(const std::string& task_id) const {
+  if (task_id.empty()) throw std::invalid_argument("task id is required");
+  constexpr const char* sql = "SELECT relative_path, kind, size, mtime_ns, content_hash, version_id, origin_device_id, logical_clock, deleted_at_ms FROM file_records WHERE task_id=? ORDER BY relative_path;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare file record list");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind list task");
+    std::vector<FileRecord> records;
+    while (true) {
+      const int result = sqlite3_step(statement);
+      if (result == SQLITE_DONE) break;
+      Check(result, connection_, "read file record list");
+      FileRecord record;
+      record.task_id = task_id;
+      record.relative_path = reinterpret_cast<const char*>(sqlite3_column_text(statement, 0));
+      record.kind = ParseFileKind(reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)));
+      record.size = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 2));
+      record.mtime_ns = sqlite3_column_int64(statement, 3);
+      const auto* hash = static_cast<const std::uint8_t*>(sqlite3_column_blob(statement, 4));
+      const int hash_size = sqlite3_column_bytes(statement, 4);
+      if (hash != nullptr && hash_size > 0) record.content_hash.assign(hash, hash + hash_size);
+      record.version_id = reinterpret_cast<const char*>(sqlite3_column_text(statement, 5));
+      record.origin_device_id = reinterpret_cast<const char*>(sqlite3_column_text(statement, 6));
+      record.logical_clock = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 7));
+      if (sqlite3_column_type(statement, 8) != SQLITE_NULL) record.deleted_at_ms = sqlite3_column_int64(statement, 8);
+      records.push_back(std::move(record));
+    }
+    cleanup();
+    return records;
+  } catch (...) { cleanup(); throw; }
+}
+void Database::InTransaction(const std::function<void()>& operation) {
+  Execute("BEGIN IMMEDIATE;");
+  try { operation(); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
+}
 int Database::SchemaVersion() const { sqlite3_stmt* statement = nullptr; Check(sqlite3_prepare_v2(connection_, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", -1, &statement, nullptr), connection_, "prepare schema version"); const int rc = sqlite3_step(statement); Check(rc, connection_, "read schema version"); const int version = sqlite3_column_int(statement, 0); sqlite3_finalize(statement); return version; }
 int Database::CountRows(const std::string& table) const { const std::string sql = "SELECT COUNT(*) FROM " + table + ";"; sqlite3_stmt* statement = nullptr; Check(sqlite3_prepare_v2(connection_, sql.c_str(), -1, &statement, nullptr), connection_, "prepare count"); const int rc = sqlite3_step(statement); Check(rc, connection_, "count rows"); const int count = sqlite3_column_int(statement, 0); sqlite3_finalize(statement); return count; }
 }  // namespace veritassync::storage

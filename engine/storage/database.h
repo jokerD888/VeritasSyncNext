@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -47,6 +48,8 @@ class Database {
                        std::uint64_t logical_clock, std::int64_t deleted_at_ms);
   [[nodiscard]] std::optional<FileRecord> FindFileRecord(
       const std::string& task_id, const std::string& relative_path) const;
+  [[nodiscard]] std::vector<FileRecord> ListFileRecords(const std::string& task_id) const;
+  void InTransaction(const std::function<void()>& operation);
   [[nodiscard]] int SchemaVersion() const;
   [[nodiscard]] int CountRows(const std::string& table) const;
 

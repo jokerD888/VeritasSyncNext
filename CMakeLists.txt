@@ -32,6 +32,7 @@ endfunction()
 add_library(veritassync_engine
   engine/common/protocol.cpp
   engine/common/content_hash.cpp
+  engine/common/uuid.cpp
   engine/storage/database.cpp
   engine/storage/ignore_rules.cpp
   engine/storage/manifest_scanner.cpp
@@ -41,13 +42,14 @@ add_library(veritassync_engine
   engine/transport/webrtc_bridge_loader.cpp
   engine/signaling/tracker_contract.cpp
   engine/sync/manifest_diff.cpp
+  engine/sync/snapshot_reconciler.cpp
   engine/sync/phase0_node.cpp
 )
 target_include_directories(veritassync_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(veritassync_engine PUBLIC unofficial::sqlite3::sqlite3)
 target_link_libraries(veritassync_engine PUBLIC BLAKE3::blake3)
 if(WIN32)
-  target_link_libraries(veritassync_engine PRIVATE kernel32)
+  target_link_libraries(veritassync_engine PRIVATE kernel32 bcrypt)
 endif()
 
 veritassync_apply_warnings(veritassync_engine)
@@ -92,10 +94,12 @@ if(BUILD_TESTING)
     tests/test_main.cpp
     tests/protocol_test.cpp
     tests/content_hash_test.cpp
+    tests/uuid_test.cpp
     tests/database_test.cpp
     tests/ignore_rules_test.cpp
     tests/manifest_scanner_test.cpp
     tests/manifest_diff_test.cpp
+    tests/snapshot_reconciler_test.cpp
     tests/safe_file_writer_test.cpp
     tests/mock_sync_test.cpp
     tests/connection_state_test.cpp
