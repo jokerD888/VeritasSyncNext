@@ -3,7 +3,9 @@
 #include <Windows.h>
 
 #include <atomic>
+#include <cstdint>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -54,6 +56,10 @@ void EnsureSafeDirectory(const std::filesystem::path& directory) {
          (destination.filename().wstring() + L".veritassync." + suffix + L".part");
 }
 
+[[nodiscard]] std::filesystem::path ResumablePartPath(const std::filesystem::path& destination) {
+  return destination.parent_path() / (destination.filename().wstring() + L".part");
+}
+
 void FlushPartFile(const std::filesystem::path& part) {
   const HANDLE handle = ::CreateFileW(part.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
                                       nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -64,6 +70,23 @@ void FlushPartFile(const std::filesystem::path& part) {
   ::CloseHandle(handle);
   if (!flushed) {
     throw std::runtime_error("cannot flush partial download");
+  }
+}
+
+void RejectSymlink(const std::filesystem::path& path, const char* const message) {
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error && error != std::errc::no_such_file_or_directory) {
+    throw std::runtime_error("cannot inspect download path");
+  }
+  if (std::filesystem::is_symlink(status)) {
+    throw std::invalid_argument(message);
+  }
+}
+
+void CommitPart(const std::filesystem::path& part, const std::filesystem::path& destination) {
+  if (!::MoveFileExW(part.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    throw std::runtime_error("cannot atomically commit download");
   }
 }
 
@@ -105,16 +128,10 @@ void SafeFileWriter::WriteAtomically(const std::string_view relative_path,
                                      const std::span<const std::uint8_t> bytes) const {
   const auto destination = ResolveTaskPath(task_root_, relative_path);
   EnsureSafeDirectory(destination.parent_path());
-  std::error_code error;
-  const auto existing_status = std::filesystem::symlink_status(destination, error);
-  if (error && error != std::errc::no_such_file_or_directory) {
-    throw std::runtime_error("cannot inspect destination file");
-  }
-  if (std::filesystem::is_symlink(existing_status)) {
-    throw std::invalid_argument("destination file must not be a symlink");
-  }
+  RejectSymlink(destination, "destination file must not be a symlink");
 
   const auto part = MakePartPath(destination);
+  std::error_code error;
   try {
     std::ofstream stream(part, std::ios::binary | std::ios::trunc);
     if (!stream) {
@@ -129,13 +146,55 @@ void SafeFileWriter::WriteAtomically(const std::string_view relative_path,
     }
     stream.close();
     FlushPartFile(part);
-    if (!::MoveFileExW(part.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-      throw std::runtime_error("cannot atomically commit download");
-    }
+    CommitPart(part, destination);
   } catch (...) {
     std::filesystem::remove(part, error);
     throw;
   }
+}
+
+void SafeFileWriter::WritePartialChunk(const std::string_view relative_path, const std::uint64_t offset,
+                                       const std::span<const std::uint8_t> bytes) const {
+  if (offset > static_cast<std::uint64_t>((std::numeric_limits<std::streamoff>::max)())) {
+    throw std::invalid_argument("chunk offset is too large");
+  }
+  const auto destination = ResolveTaskPath(task_root_, relative_path);
+  EnsureSafeDirectory(destination.parent_path());
+  RejectSymlink(destination, "destination file must not be a symlink");
+  const auto part = ResumablePartPath(destination);
+  RejectSymlink(part, "partial file must not be a symlink");
+  if (!std::filesystem::exists(part)) {
+    std::ofstream create(part, std::ios::binary);
+    if (!create) throw std::runtime_error("cannot create partial download");
+  }
+  std::fstream stream(part, std::ios::binary | std::ios::in | std::ios::out);
+  if (!stream) throw std::runtime_error("cannot open partial download");
+  stream.seekp(static_cast<std::streamoff>(offset));
+  if (!bytes.empty()) stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  stream.flush();
+  if (!stream) throw std::runtime_error("cannot write partial download");
+  stream.close();
+  FlushPartFile(part);
+}
+
+void SafeFileWriter::CommitPartial(const std::string_view relative_path, const std::uint64_t expected_size,
+                                   const common::ContentHash& expected_hash) const {
+  const auto destination = ResolveTaskPath(task_root_, relative_path);
+  const auto part = ResumablePartPath(destination);
+  RejectSymlink(destination, "destination file must not be a symlink");
+  RejectSymlink(part, "partial file must not be a symlink");
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(part, error) || error) {
+    throw std::runtime_error("partial download does not exist");
+  }
+  if (std::filesystem::file_size(part, error) != expected_size || error) {
+    throw std::invalid_argument("partial download size does not match");
+  }
+  if (common::Blake3File(part) != expected_hash) {
+    throw std::invalid_argument("partial download hash does not match");
+  }
+  FlushPartFile(part);
+  CommitPart(part, destination);
 }
 
 }  // namespace veritassync::storage

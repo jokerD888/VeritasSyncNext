@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/common/content_hash.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <span>
@@ -20,6 +22,10 @@ class SafeFileWriter {
 
   void WriteAtomically(std::string_view relative_path,
                        std::span<const std::uint8_t> bytes) const;
+  void WritePartialChunk(std::string_view relative_path, std::uint64_t offset,
+                         std::span<const std::uint8_t> bytes) const;
+  void CommitPartial(std::string_view relative_path, std::uint64_t expected_size,
+                     const common::ContentHash& expected_hash) const;
 
  private:
   std::filesystem::path task_root_;

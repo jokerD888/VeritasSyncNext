@@ -1,4 +1,5 @@
 #include "engine/storage/safe_file_writer.h"
+#include "engine/common/content_hash.h"
 #include "tests/test_framework.h"
 
 #include <chrono>
@@ -62,4 +63,16 @@ VSYNC_TEST(SafeFileWriterAtomicallyReplacesCompletedDestination) {
   writer.WriteAtomically("notes.txt", old_content);
   writer.WriteAtomically("notes.txt", new_content);
   VSYNC_CHECK(ReadBytes(directory.Path() / "notes.txt") == new_content);
+}
+
+VSYNC_TEST(SafeFileWriterResumesChunksThenVerifiesBeforeCommit) {
+  TemporaryDirectory directory;
+  veritassync::storage::SafeFileWriter writer(directory.Path());
+  const std::vector<std::uint8_t> expected{'a', 'b', 'c', 'd', 'e', 'f'};
+  writer.WritePartialChunk("nested/file.bin", 3, std::span(expected).subspan(3));
+  VSYNC_CHECK_THROWS(writer.CommitPartial("nested/file.bin", expected.size(), veritassync::common::Blake3(expected)));
+  writer.WritePartialChunk("nested/file.bin", 0, std::span(expected).first(3));
+  writer.CommitPartial("nested/file.bin", expected.size(), veritassync::common::Blake3(expected));
+  VSYNC_CHECK(ReadBytes(directory.Path() / "nested" / "file.bin") == expected);
+  VSYNC_CHECK(!std::filesystem::exists(directory.Path() / "nested" / "file.bin.part"));
 }
