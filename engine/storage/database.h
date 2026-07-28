@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <filesystem>
 #include <functional>
 #include <cstdint>
@@ -33,6 +34,19 @@ struct FileRecord {
   std::optional<std::int64_t> deleted_at_ms;
 };
 
+using TransferId = std::array<std::uint8_t, 16>;
+
+struct TransferRecord {
+  TransferId transfer_id;
+  std::string task_id;
+  std::string peer_device_id;
+  std::string direction;
+  std::vector<std::uint8_t> file_hash;
+  std::string state;
+  std::int64_t created_at_ms = 0;
+  std::int64_t updated_at_ms = 0;
+};
+
 class Database {
  public:
   explicit Database(const std::filesystem::path& path);
@@ -51,6 +65,10 @@ class Database {
       const std::string& task_id, const std::string& relative_path) const;
   [[nodiscard]] std::vector<FileRecord> ListFileRecords(const std::string& task_id) const;
   void InTransaction(const std::function<void()>& operation);
+  void CreateTransfer(const TransferRecord& transfer);
+  void MarkTransferChunkCompleted(const TransferId& transfer_id, std::uint64_t chunk_index,
+                                  std::int64_t updated_at_ms);
+  [[nodiscard]] std::vector<std::uint64_t> CompletedTransferChunks(const TransferId& transfer_id) const;
   [[nodiscard]] int SchemaVersion() const;
   [[nodiscard]] int CountRows(const std::string& table) const;
 

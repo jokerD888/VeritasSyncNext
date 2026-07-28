@@ -3,6 +3,7 @@
 #include <sqlite3.h>
 
 #include <stdexcept>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -98,6 +99,20 @@ void ValidateFileRecord(const FileRecord& record) {
   if (record.kind != FileKind::kTombstone && record.deleted_at_ms.has_value()) {
     throw std::invalid_argument("live records must not have a deletion timestamp");
   }
+}
+
+void ValidateTransfer(const TransferRecord& transfer) {
+  if (transfer.task_id.empty() || transfer.peer_device_id.empty() ||
+      (transfer.direction != "upload" && transfer.direction != "download") ||
+      transfer.file_hash.empty() || transfer.state.empty() || transfer.created_at_ms <= 0 || transfer.updated_at_ms <= 0) {
+    throw std::invalid_argument("transfer fields are invalid");
+  }
+}
+
+void BindTransferId(sqlite3_stmt* const statement, const int index, const TransferId& transfer_id,
+                    sqlite3* const connection, const char* const operation) {
+  Check(sqlite3_bind_blob(statement, index, transfer_id.data(), static_cast<int>(transfer_id.size()), SQLITE_TRANSIENT),
+        connection, operation);
 }
 }
 
@@ -247,6 +262,72 @@ std::vector<FileRecord> Database::ListFileRecords(const std::string& task_id) co
 void Database::InTransaction(const std::function<void()>& operation) {
   Execute("BEGIN IMMEDIATE;");
   try { operation(); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
+}
+void Database::CreateTransfer(const TransferRecord& transfer) {
+  ValidateTransfer(transfer);
+  constexpr const char* sql = "INSERT INTO transfers(transfer_id, task_id, peer_device_id, direction, file_hash, state, created_at_ms, updated_at_ms) VALUES(?, ?, ?, ?, ?, ?, ?, ?);";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare transfer insert");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    BindTransferId(statement, 1, transfer.transfer_id, connection_, "bind transfer id");
+    Check(sqlite3_bind_text(statement, 2, transfer.task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind transfer task");
+    Check(sqlite3_bind_text(statement, 3, transfer.peer_device_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind transfer peer");
+    Check(sqlite3_bind_text(statement, 4, transfer.direction.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind transfer direction");
+    Check(sqlite3_bind_blob(statement, 5, transfer.file_hash.data(), static_cast<int>(transfer.file_hash.size()), SQLITE_TRANSIENT), connection_, "bind transfer hash");
+    Check(sqlite3_bind_text(statement, 6, transfer.state.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind transfer state");
+    Check(sqlite3_bind_int64(statement, 7, transfer.created_at_ms), connection_, "bind transfer creation time");
+    Check(sqlite3_bind_int64(statement, 8, transfer.updated_at_ms), connection_, "bind transfer update time");
+    Check(sqlite3_step(statement), connection_, "insert transfer");
+    cleanup();
+  } catch (...) { cleanup(); throw; }
+}
+void Database::MarkTransferChunkCompleted(const TransferId& transfer_id, const std::uint64_t chunk_index,
+                                          const std::int64_t updated_at_ms) {
+  if (chunk_index > static_cast<std::uint64_t>((std::numeric_limits<sqlite3_int64>::max)()) || updated_at_ms <= 0) {
+    throw std::invalid_argument("transfer chunk fields are invalid");
+  }
+  InTransaction([&] {
+    constexpr const char* chunk_sql = "INSERT INTO transfer_chunks(transfer_id, chunk_index, completed) VALUES(?, ?, 1) ON CONFLICT(transfer_id, chunk_index) DO UPDATE SET completed=1;";
+    sqlite3_stmt* chunk = nullptr;
+    Check(sqlite3_prepare_v2(connection_, chunk_sql, -1, &chunk, nullptr), connection_, "prepare transfer chunk update");
+    const auto cleanup_chunk = [&] { sqlite3_finalize(chunk); };
+    try {
+      BindTransferId(chunk, 1, transfer_id, connection_, "bind chunk transfer id");
+      Check(sqlite3_bind_int64(chunk, 2, static_cast<sqlite3_int64>(chunk_index)), connection_, "bind chunk index");
+      Check(sqlite3_step(chunk), connection_, "mark transfer chunk complete");
+      cleanup_chunk();
+    } catch (...) { cleanup_chunk(); throw; }
+    constexpr const char* transfer_sql = "UPDATE transfers SET updated_at_ms=? WHERE transfer_id=?;";
+    sqlite3_stmt* transfer = nullptr;
+    Check(sqlite3_prepare_v2(connection_, transfer_sql, -1, &transfer, nullptr), connection_, "prepare transfer timestamp update");
+    const auto cleanup_transfer = [&] { sqlite3_finalize(transfer); };
+    try {
+      Check(sqlite3_bind_int64(transfer, 1, updated_at_ms), connection_, "bind transfer timestamp");
+      BindTransferId(transfer, 2, transfer_id, connection_, "bind transfer update id");
+      Check(sqlite3_step(transfer), connection_, "update transfer timestamp");
+      if (sqlite3_changes(connection_) != 1) throw std::invalid_argument("transfer does not exist");
+      cleanup_transfer();
+    } catch (...) { cleanup_transfer(); throw; }
+  });
+}
+std::vector<std::uint64_t> Database::CompletedTransferChunks(const TransferId& transfer_id) const {
+  constexpr const char* sql = "SELECT chunk_index FROM transfer_chunks WHERE transfer_id=? AND completed=1 ORDER BY chunk_index;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare transfer chunk list");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    BindTransferId(statement, 1, transfer_id, connection_, "bind transfer chunk list id");
+    std::vector<std::uint64_t> chunks;
+    while (true) {
+      const int result = sqlite3_step(statement);
+      if (result == SQLITE_DONE) break;
+      Check(result, connection_, "read transfer chunk list");
+      chunks.push_back(static_cast<std::uint64_t>(sqlite3_column_int64(statement, 0)));
+    }
+    cleanup();
+    return chunks;
+  } catch (...) { cleanup(); throw; }
 }
 int Database::SchemaVersion() const { sqlite3_stmt* statement = nullptr; Check(sqlite3_prepare_v2(connection_, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", -1, &statement, nullptr), connection_, "prepare schema version"); const int rc = sqlite3_step(statement); Check(rc, connection_, "read schema version"); const int version = sqlite3_column_int(statement, 0); sqlite3_finalize(statement); return version; }
 int Database::CountRows(const std::string& table) const { const std::string sql = "SELECT COUNT(*) FROM " + table + ";"; sqlite3_stmt* statement = nullptr; Check(sqlite3_prepare_v2(connection_, sql.c_str(), -1, &statement, nullptr), connection_, "prepare count"); const int rc = sqlite3_step(statement); Check(rc, connection_, "count rows"); const int count = sqlite3_column_int(statement, 0); sqlite3_finalize(statement); return count; }

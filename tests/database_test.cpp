@@ -49,3 +49,22 @@ VSYNC_TEST(DatabasePersistsFileVersionsAndTombstones) {
   std::filesystem::remove(path.string() + "-shm");
   std::filesystem::remove(path.string() + "-wal");
 }
+
+VSYNC_TEST(DatabasePersistsCompletedTransferChunksForResume) {
+  const auto path = std::filesystem::temp_directory_path() / ("veritassync-transfer-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  {
+    veritassync::storage::Database database(path);
+    database.ApplyMigrations();
+    database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
+    veritassync::storage::TransferId transfer_id{};
+    transfer_id.front() = 42;
+    database.CreateTransfer({transfer_id, "task-1", "device-b", "download", std::vector<std::uint8_t>(32, 7), "active", 100, 100});
+    database.MarkTransferChunkCompleted(transfer_id, 3, 101);
+    database.MarkTransferChunkCompleted(transfer_id, 0, 102);
+    database.MarkTransferChunkCompleted(transfer_id, 3, 103);
+    VSYNC_CHECK(database.CompletedTransferChunks(transfer_id) == std::vector<std::uint64_t>({0, 3}));
+  }
+  std::filesystem::remove(path);
+  std::filesystem::remove(path.string() + "-shm");
+  std::filesystem::remove(path.string() + "-wal");
+}
