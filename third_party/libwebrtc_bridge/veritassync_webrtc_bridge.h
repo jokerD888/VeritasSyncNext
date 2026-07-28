@@ -16,6 +16,8 @@ enum { VSYNC_WEBRTC_BRIDGE_ABI_VERSION = 1 };
 
 VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeAbiVersion(void);
 VSYNC_WEBRTC_BRIDGE_EXPORT uint64_t VeritasSyncWebRtcBridgeMaxQueuedBytes(void);
+VSYNC_WEBRTC_BRIDGE_EXPORT void* VeritasSyncWebRtcBridgeCreateFactory(void);
+VSYNC_WEBRTC_BRIDGE_EXPORT void VeritasSyncWebRtcBridgeDestroyFactory(void* factory);
 
 #ifdef __cplusplus
 }

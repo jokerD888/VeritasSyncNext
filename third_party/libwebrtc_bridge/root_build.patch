@@ -1,16 +1,35 @@
 diff --git a/BUILD.gn b/BUILD.gn
-index c3158f5b4..9e407459d 100644
+index 442d5f212f..ad1776536d 100644
 --- a/BUILD.gn
 +++ b/BUILD.gn
-@@ -37,7 +37,10 @@ if (!build_with_chromium) {
+@@ -42,9 +42,22 @@
+ if (!build_with_chromium) {
++  # The C ABI bridge is built by WebRTC's own GN toolchain and links the
++  # complete static library. The CMake engine never consumes WebRTC C++ types.
++  rtc_shared_library("veritassync_webrtc_bridge") {
++    sources = [ "veritassync_bridge/veritassync_webrtc_bridge.cc" ]
++    deps = [
++      ":webrtc",
++      "//api:enable_media_with_defaults",
++    ]
++  }
++
+   # This target should (transitively) cause everything to be built; if you run
    # 'ninja default' and then 'ninja all', the second build should do no work.
    group("default") {
      testonly = true
 -    deps = [ ":webrtc" ]
 +    deps = [
 +      ":webrtc",
-+      "//veritassync_bridge:veritassync_webrtc_bridge",
++      ":veritassync_webrtc_bridge",
 +    ]
      if (rtc_build_examples) {
        deps += [ "examples" ]
      }
+@@ -536,5 +549,6 @@ if (!build_with_chromium) {
+     # Only the root target and the test should depend on this.
+     visibility = [
+       "//:default",
++      "//:veritassync_webrtc_bridge",
+       "//:webrtc_lib_link_test",
+     ]

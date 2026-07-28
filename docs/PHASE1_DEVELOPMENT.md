@@ -36,9 +36,10 @@ ctest --test-dir build\default -C Debug --output-on-failure
 
 This deliberately keeps WebRTC C++ headers out of the MSVC-built engine. The bridge
 is a narrow C ABI boundary and its runtime test calls the real DataChannel send-queue
-API. It is a toolchain/ABI smoke test, not a claim that PeerConnection signaling is
-complete. The next adapter revision will create `control-v1` and `bulk-v1` channels
-and forward their bytes to the existing `Transport` contract.
+API and creates/destroys a PeerConnectionFactory. It is a toolchain/ABI smoke test,
+not a claim that PeerConnection signaling is complete. The next adapter revision will
+create `control-v1` and `bulk-v1` channels and forward their bytes to the existing
+`Transport` contract.
 
 The bridge script makes one local, reproducible build-graph change to the otherwise
 pinned checkout so GN emits the bridge target. Its source and patch both live in this

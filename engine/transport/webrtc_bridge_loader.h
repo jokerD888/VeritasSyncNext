@@ -11,6 +11,7 @@ class WebRtcBridgeLoader {
 
   [[nodiscard]] static std::uint64_t VerifyAndReadMaxQueuedBytes(
       const std::filesystem::path& library_path);
+  static void VerifyFactoryLifecycle(const std::filesystem::path& library_path);
 };
 
 }  // namespace veritassync::transport

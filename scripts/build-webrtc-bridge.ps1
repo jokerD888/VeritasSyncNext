@@ -24,13 +24,13 @@ New-Item -ItemType Directory -Force -Path $bridgeDestination | Out-Null
 Copy-Item -Path (Join-Path $bridgeSource '*') -Destination $bridgeDestination -Recurse -Force
 Push-Location $sourceRoot
 try {
-  if (-not (Select-String -Path 'BUILD.gn' -SimpleMatch '//veritassync_bridge:veritassync_webrtc_bridge' -Quiet)) {
+  if (-not (Select-String -Path 'BUILD.gn' -SimpleMatch ':veritassync_webrtc_bridge' -Quiet)) {
     git apply $rootBuildPatch
     if ($LASTEXITCODE -ne 0) { throw 'Unable to add the bridge target to the pinned WebRTC build graph' }
   }
   gn gen $OutputDirectory
   if ($LASTEXITCODE -ne 0) { throw 'GN generation failed' }
-  autoninja -C $OutputDirectory veritassync_bridge:veritassync_webrtc_bridge
+  autoninja -C $OutputDirectory veritassync_webrtc_bridge
   if ($LASTEXITCODE -ne 0) { throw 'WebRTC bridge build failed' }
   Write-Host "WebRTC C ABI bridge is ready at $sourceRoot\$OutputDirectory\veritassync_webrtc_bridge.dll"
 } finally { Pop-Location }

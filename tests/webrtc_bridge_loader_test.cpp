@@ -16,4 +16,5 @@ VSYNC_TEST(WebRtcBridgeUsesStableCAbi) {
   }
   const auto max_queued_bytes = veritassync::transport::WebRtcBridgeLoader::VerifyAndReadMaxQueuedBytes(path.data());
   VSYNC_CHECK(max_queued_bytes == 16U * 1024U * 1024U);
+  veritassync::transport::WebRtcBridgeLoader::VerifyFactoryLifecycle(path.data());
 }
