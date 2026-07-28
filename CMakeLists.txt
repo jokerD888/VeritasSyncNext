@@ -40,6 +40,7 @@ add_library(veritassync_engine
   engine/transport/connection_state.cpp
   engine/transport/webrtc_bridge_loader.cpp
   engine/signaling/tracker_contract.cpp
+  engine/sync/manifest_diff.cpp
   engine/sync/phase0_node.cpp
 )
 target_include_directories(veritassync_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -94,6 +95,7 @@ if(BUILD_TESTING)
     tests/database_test.cpp
     tests/ignore_rules_test.cpp
     tests/manifest_scanner_test.cpp
+    tests/manifest_diff_test.cpp
     tests/safe_file_writer_test.cpp
     tests/mock_sync_test.cpp
     tests/connection_state_test.cpp
