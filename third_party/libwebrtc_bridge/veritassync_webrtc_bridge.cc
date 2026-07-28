@@ -8,6 +8,7 @@
 #include "api/data_channel_interface.h"
 #include "api/enable_media_with_defaults.h"
 #include "api/environment/environment_factory.h"
+#include "api/jsep.h"
 #include "api/make_ref_counted.h"
 #include "api/peer_connection_interface.h"
 #include "rtc_base/ssl_adapter.h"
@@ -43,13 +44,7 @@ class FactoryHolder final {
   [[nodiscard]] bool Ready() const { return factory_ != nullptr; }
 
   [[nodiscard]] bool CreateProtocolChannels() {
-    if (!Ready() || peer_connection_ != nullptr) return false;
-    webrtc::PeerConnectionInterface::RTCConfiguration configuration;
-    configuration.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
-    auto peer_connection = factory_->CreatePeerConnectionOrError(
-        configuration, webrtc::PeerConnectionDependencies(&peer_observer_));
-    if (!peer_connection.ok()) return false;
-    peer_connection_ = peer_connection.MoveValue();
+    if (!CreatePeerConnection() || control_channel_ != nullptr || bulk_channel_ != nullptr) return false;
 
     webrtc::DataChannelInit control_init;
     control_init.ordered = true;
@@ -66,40 +61,91 @@ class FactoryHolder final {
            bulk_channel_->label() == "bulk-v1" && !bulk_channel_->ordered();
   }
 
+  [[nodiscard]] bool CreatePeerConnection() {
+    if (!Ready()) return false;
+    if (peer_connection_ != nullptr) return true;
+    webrtc::PeerConnectionInterface::RTCConfiguration configuration;
+    configuration.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
+    auto peer_connection = factory_->CreatePeerConnectionOrError(
+        configuration, webrtc::PeerConnectionDependencies(&peer_observer_));
+    if (!peer_connection.ok()) return false;
+    peer_connection_ = peer_connection.MoveValue();
+    return true;
+  }
+
   void SetOfferCallback(VsyncWebRtcBridgeSdpCallback callback, void* context) {
     std::scoped_lock lock(callback_mutex_);
     offer_callback_ = callback;
     offer_context_ = context;
   }
+  void SetAnswerCallback(VsyncWebRtcBridgeSdpCallback callback, void* context) {
+    std::scoped_lock lock(callback_mutex_);
+    answer_callback_ = callback;
+    answer_context_ = context;
+  }
 
   [[nodiscard]] bool CreateOffer();
+  [[nodiscard]] bool ApplyRemoteOffer(const char* sdp, uint32_t length);
+  [[nodiscard]] bool ApplyRemoteAnswer(const char* sdp, uint32_t length);
 
  private:
   class SetLocalDescriptionObserver : public webrtc::SetSessionDescriptionObserver {
    public:
-    void OnSuccess() override {}
+    SetLocalDescriptionObserver(FactoryHolder& owner, std::string sdp, bool offer)
+        : owner_(owner), sdp_(std::move(sdp)), offer_(offer) {}
+    void OnSuccess() override {
+      if (offer_) owner_.EmitOffer(sdp_);
+      else owner_.EmitAnswer(sdp_);
+    }
     void OnFailure(webrtc::RTCError) override {}
+   private:
+    FactoryHolder& owner_;
+    std::string sdp_;
+    bool offer_;
   };
 
-  class OfferObserver : public webrtc::CreateSessionDescriptionObserver {
+  class DescriptionObserver : public webrtc::CreateSessionDescriptionObserver {
    public:
-    explicit OfferObserver(FactoryHolder& owner) : owner_(owner) {}
+    DescriptionObserver(FactoryHolder& owner, bool offer) : owner_(owner), offer_(offer) {}
     void OnSuccess(webrtc::SessionDescriptionInterface* description) override {
       std::string sdp;
       description->ToString(&sdp);
       owner_.peer_connection_->SetLocalDescription(
-          webrtc::make_ref_counted<SetLocalDescriptionObserver>().get(), description);
-      owner_.EmitOffer(sdp);
+          webrtc::make_ref_counted<SetLocalDescriptionObserver>(owner_, std::move(sdp), offer_).get(), description);
     }
     void OnFailure(webrtc::RTCError) override {}
 
    private:
     FactoryHolder& owner_;
+    bool offer_;
+  };
+
+  class RemoteOfferObserver : public webrtc::SetRemoteDescriptionObserverInterface {
+   public:
+    explicit RemoteOfferObserver(FactoryHolder& owner) : owner_(owner) {}
+    void OnSetRemoteDescriptionComplete(webrtc::RTCError error) override {
+      if (error.ok()) owner_.CreateAnswer();
+    }
+   private:
+    FactoryHolder& owner_;
+  };
+
+  class RemoteAnswerObserver : public webrtc::SetRemoteDescriptionObserverInterface {
+   public:
+    void OnSetRemoteDescriptionComplete(webrtc::RTCError) override {}
   };
 
   void EmitOffer(const std::string& sdp) {
     std::scoped_lock lock(callback_mutex_);
     if (offer_callback_ != nullptr) offer_callback_(offer_context_, sdp.data(), static_cast<uint32_t>(sdp.size()));
+  }
+  void EmitAnswer(const std::string& sdp) {
+    std::scoped_lock lock(callback_mutex_);
+    if (answer_callback_ != nullptr) answer_callback_(answer_context_, sdp.data(), static_cast<uint32_t>(sdp.size()));
+  }
+  void CreateAnswer() {
+    peer_connection_->CreateAnswer(webrtc::make_ref_counted<DescriptionObserver>(*this, false).get(),
+                                   webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
   }
 
   std::unique_ptr<webrtc::Thread> network_thread_;
@@ -113,12 +159,32 @@ class FactoryHolder final {
   std::mutex callback_mutex_;
   VsyncWebRtcBridgeSdpCallback offer_callback_ = nullptr;
   void* offer_context_ = nullptr;
+  VsyncWebRtcBridgeSdpCallback answer_callback_ = nullptr;
+  void* answer_context_ = nullptr;
 };
 
 bool FactoryHolder::CreateOffer() {
   if (peer_connection_ == nullptr) return false;
-  peer_connection_->CreateOffer(webrtc::make_ref_counted<OfferObserver>(*this).get(),
+  peer_connection_->CreateOffer(webrtc::make_ref_counted<DescriptionObserver>(*this, true).get(),
                                 webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
+  return true;
+}
+
+bool FactoryHolder::ApplyRemoteOffer(const char* sdp, uint32_t length) {
+  if (peer_connection_ == nullptr || sdp == nullptr) return false;
+  auto description = webrtc::CreateSessionDescription(webrtc::SdpType::kOffer, std::string(sdp, length));
+  if (description == nullptr) return false;
+  peer_connection_->SetRemoteDescription(std::move(description),
+                                         webrtc::make_ref_counted<RemoteOfferObserver>(*this));
+  return true;
+}
+
+bool FactoryHolder::ApplyRemoteAnswer(const char* sdp, uint32_t length) {
+  if (peer_connection_ == nullptr || sdp == nullptr) return false;
+  auto description = webrtc::CreateSessionDescription(webrtc::SdpType::kAnswer, std::string(sdp, length));
+  if (description == nullptr) return false;
+  peer_connection_->SetRemoteDescription(std::move(description),
+                                         webrtc::make_ref_counted<RemoteAnswerObserver>());
   return true;
 }
 }  // namespace
@@ -151,7 +217,27 @@ extern "C" void VeritasSyncWebRtcBridgeSetOfferCallback(
   if (factory != nullptr) static_cast<FactoryHolder*>(factory)->SetOfferCallback(callback, context);
 }
 
+extern "C" void VeritasSyncWebRtcBridgeSetAnswerCallback(
+    void* factory, VsyncWebRtcBridgeSdpCallback callback, void* context) {
+  if (factory != nullptr) static_cast<FactoryHolder*>(factory)->SetAnswerCallback(callback, context);
+}
+
+extern "C" uint32_t VeritasSyncWebRtcBridgeCreatePeerConnection(void* factory) {
+  if (factory == nullptr) return 0;
+  return static_cast<FactoryHolder*>(factory)->CreatePeerConnection() ? 1U : 0U;
+}
+
 extern "C" uint32_t VeritasSyncWebRtcBridgeCreateOffer(void* factory) {
   if (factory == nullptr) return 0;
   return static_cast<FactoryHolder*>(factory)->CreateOffer() ? 1U : 0U;
+}
+
+extern "C" uint32_t VeritasSyncWebRtcBridgeApplyRemoteOffer(void* factory, const char* sdp, uint32_t length) {
+  if (factory == nullptr) return 0;
+  return static_cast<FactoryHolder*>(factory)->ApplyRemoteOffer(sdp, length) ? 1U : 0U;
+}
+
+extern "C" uint32_t VeritasSyncWebRtcBridgeApplyRemoteAnswer(void* factory, const char* sdp, uint32_t length) {
+  if (factory == nullptr) return 0;
+  return static_cast<FactoryHolder*>(factory)->ApplyRemoteAnswer(sdp, length) ? 1U : 0U;
 }

@@ -22,7 +22,14 @@ VSYNC_WEBRTC_BRIDGE_EXPORT void VeritasSyncWebRtcBridgeDestroyFactory(void* fact
 VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeCreateProtocolChannels(void* factory);
 VSYNC_WEBRTC_BRIDGE_EXPORT void VeritasSyncWebRtcBridgeSetOfferCallback(
     void* factory, VsyncWebRtcBridgeSdpCallback callback, void* context);
+VSYNC_WEBRTC_BRIDGE_EXPORT void VeritasSyncWebRtcBridgeSetAnswerCallback(
+    void* factory, VsyncWebRtcBridgeSdpCallback callback, void* context);
+VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeCreatePeerConnection(void* factory);
 VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeCreateOffer(void* factory);
+VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeApplyRemoteOffer(
+    void* factory, const char* sdp, uint32_t length);
+VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeApplyRemoteAnswer(
+    void* factory, const char* sdp, uint32_t length);
 
 #ifdef __cplusplus
 }
