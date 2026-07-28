@@ -31,6 +31,7 @@ endfunction()
 add_library(veritassync_engine
   engine/common/protocol.cpp
   engine/storage/database.cpp
+  engine/storage/ignore_rules.cpp
   engine/storage/safe_file_writer.cpp
   engine/transport/mock_transport.cpp
   engine/transport/connection_state.cpp
@@ -86,6 +87,7 @@ if(BUILD_TESTING)
     tests/test_main.cpp
     tests/protocol_test.cpp
     tests/database_test.cpp
+    tests/ignore_rules_test.cpp
     tests/safe_file_writer_test.cpp
     tests/mock_sync_test.cpp
     tests/connection_state_test.cpp
