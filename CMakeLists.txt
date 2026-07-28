@@ -39,6 +39,7 @@ add_library(veritassync_engine
   engine/storage/safe_file_writer.cpp
   engine/transport/mock_transport.cpp
   engine/transport/connection_state.cpp
+  engine/transport/send_scheduler.cpp
   engine/transport/webrtc_bridge_loader.cpp
   engine/signaling/tracker_contract.cpp
   engine/sync/manifest_diff.cpp
@@ -103,6 +104,7 @@ if(BUILD_TESTING)
     tests/safe_file_writer_test.cpp
     tests/mock_sync_test.cpp
     tests/connection_state_test.cpp
+    tests/send_scheduler_test.cpp
     tests/tracker_contract_test.cpp
   )
   if(VERITASSYNC_ENABLE_WEBRTC AND NOT VERITASSYNC_WEBRTC_BRIDGE_LIBRARY STREQUAL "")
