@@ -1,0 +1,34 @@
+#include "engine/sync/download_receiver.h"
+
+#include "engine/common/content_hash.h"
+
+#include <stdexcept>
+#include <utility>
+
+namespace veritassync::sync {
+DownloadReceiver::DownloadReceiver(storage::Database& database, const storage::TransferId& transfer_id,
+                                   storage::SafeFileWriter& writer, std::string relative_path,
+                                   const std::uint64_t expected_size, common::ContentHash expected_hash,
+                                   const std::uint64_t chunk_count)
+    : database_(database), transfer_id_(transfer_id), writer_(writer), relative_path_(std::move(relative_path)),
+      expected_size_(expected_size), expected_hash_(expected_hash), chunk_count_(chunk_count) {
+  if (relative_path_.empty() || chunk_count_ == 0) throw std::invalid_argument("download metadata is invalid");
+}
+void DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::uint64_t offset,
+                                   const std::span<const std::uint8_t> bytes, const common::ContentHash& chunk_hash,
+                                   const std::int64_t updated_at_ms) {
+  if (chunk_index >= chunk_count_ || common::Blake3(bytes) != chunk_hash) {
+    throw std::invalid_argument("download chunk is invalid");
+  }
+  writer_.WritePartialChunk(relative_path_, offset, bytes);
+  database_.MarkTransferChunkCompleted(transfer_id_, chunk_index, updated_at_ms);
+}
+void DownloadReceiver::Commit() {
+  const auto completed = database_.CompletedTransferChunks(transfer_id_);
+  if (completed.size() != chunk_count_) throw std::logic_error("download has missing chunks");
+  for (std::uint64_t index = 0; index < chunk_count_; ++index) {
+    if (completed[index] != index) throw std::logic_error("download has missing chunks");
+  }
+  writer_.CommitPartial(relative_path_, expected_size_, expected_hash_);
+}
+}  // namespace veritassync::sync

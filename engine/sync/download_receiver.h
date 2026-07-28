@@ -1,0 +1,32 @@
+#pragma once
+
+#include "engine/storage/database.h"
+#include "engine/storage/safe_file_writer.h"
+
+#include <cstdint>
+#include <string>
+
+namespace veritassync::sync {
+
+class DownloadReceiver {
+ public:
+  DownloadReceiver(storage::Database& database, const storage::TransferId& transfer_id,
+                   storage::SafeFileWriter& writer, std::string relative_path,
+                   std::uint64_t expected_size, common::ContentHash expected_hash,
+                   std::uint64_t chunk_count);
+  void AcceptChunk(std::uint64_t chunk_index, std::uint64_t offset,
+                   std::span<const std::uint8_t> bytes, const common::ContentHash& chunk_hash,
+                   std::int64_t updated_at_ms);
+  void Commit();
+
+ private:
+  storage::Database& database_;
+  storage::TransferId transfer_id_;
+  storage::SafeFileWriter& writer_;
+  std::string relative_path_;
+  std::uint64_t expected_size_;
+  common::ContentHash expected_hash_;
+  std::uint64_t chunk_count_;
+};
+
+}  // namespace veritassync::sync
