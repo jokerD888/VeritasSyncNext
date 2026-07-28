@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 project(VeritasSyncNext VERSION 0.1.0 LANGUAGES CXX)
 
 option(VERITASSYNC_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
-option(VERITASSYNC_ENABLE_WEBRTC "Enable the pinned libwebrtc adapter" OFF)
+option(VERITASSYNC_ENABLE_WEBRTC "Verify the pinned libwebrtc build required by the adapter" OFF)
 set(VERITASSYNC_WEBRTC_ROOT "" CACHE PATH "Pinned libwebrtc source checkout")
 set(VERITASSYNC_WEBRTC_LIBRARY "" CACHE FILEPATH "libwebrtc static library built from the pinned checkout")
 
@@ -41,16 +41,29 @@ target_link_libraries(veritassync_engine PUBLIC unofficial::sqlite3::sqlite3)
 veritassync_apply_warnings(veritassync_engine)
 
 if(VERITASSYNC_ENABLE_WEBRTC)
-  if(NOT EXISTS "${VERITASSYNC_WEBRTC_ROOT}/api/peer_connection_interface.h")
+  if(NOT EXISTS "${VERITASSYNC_WEBRTC_ROOT}/.git")
     message(FATAL_ERROR "VERITASSYNC_WEBRTC_ROOT must be a libwebrtc checkout pinned by third_party/libwebrtc.lock")
   endif()
   if(NOT EXISTS "${VERITASSYNC_WEBRTC_LIBRARY}")
     message(FATAL_ERROR "VERITASSYNC_WEBRTC_LIBRARY must name the libwebrtc artifact from the pinned checkout")
   endif()
-  target_sources(veritassync_engine PRIVATE engine/transport/libwebrtc_build_probe.cpp)
-  target_include_directories(veritassync_engine PRIVATE "${VERITASSYNC_WEBRTC_ROOT}")
-  target_link_libraries(veritassync_engine PRIVATE "${VERITASSYNC_WEBRTC_LIBRARY}")
-  target_compile_definitions(veritassync_engine PRIVATE VERITASSYNC_WITH_WEBRTC=1)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libwebrtc.lock" veritassync_webrtc_lock)
+  string(REGEX MATCH "commit = \"[^\"]+\"" veritassync_webrtc_lock_match "${veritassync_webrtc_lock}")
+  string(REGEX REPLACE "commit = \"([^\"]+)\"" "\\1" veritassync_webrtc_commit "${veritassync_webrtc_lock_match}")
+  execute_process(
+    COMMAND git -C "${VERITASSYNC_WEBRTC_ROOT}" rev-parse HEAD
+    OUTPUT_VARIABLE veritassync_webrtc_checkout_commit
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE veritassync_webrtc_revision_result
+  )
+  if(NOT veritassync_webrtc_revision_result EQUAL 0 OR
+     NOT veritassync_webrtc_checkout_commit STREQUAL veritassync_webrtc_commit)
+    message(FATAL_ERROR "VERITASSYNC_WEBRTC_ROOT is not at the commit pinned by third_party/libwebrtc.lock")
+  endif()
+  add_custom_target(veritassync_webrtc_artifact
+    COMMENT "Verified pinned libwebrtc ${veritassync_webrtc_commit}: ${VERITASSYNC_WEBRTC_LIBRARY}"
+  )
+  add_dependencies(veritassync_engine veritassync_webrtc_artifact)
 endif()
 
 add_executable(veritassync-engine engine/app/main.cpp)

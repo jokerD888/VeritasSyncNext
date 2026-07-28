@@ -16,16 +16,23 @@ gn gen out\veritassync --args='is_debug=false is_component_build=false rtc_inclu
 autoninja -C out\veritassync
 ```
 
-Enable the adapter only with the resulting exact checkout and artifact:
+On Windows the bootstrap uses the installed Visual Studio toolchain
+(`DEPOT_TOOLS_WIN_TOOLCHAIN=0`), so it does not require access to Google's internal
+Chrome Windows toolchain bucket.
+
+Verify the pinned checkout and its build artifact from the CMake project:
 
 ```powershell
-cmake --preset default -DVERITASSYNC_ENABLE_WEBRTC=ON -DVERITASSYNC_WEBRTC_ROOT=D:\deps\webrtc\src -DVERITASSYNC_WEBRTC_LIBRARY=D:\deps\webrtc\src\out\veritassync\webrtc.lib
+cmake --preset default -DVERITASSYNC_ENABLE_WEBRTC=ON -DVERITASSYNC_WEBRTC_ROOT=D:\deps\webrtc\src -DVERITASSYNC_WEBRTC_LIBRARY=D:\deps\webrtc\src\out\veritassync\obj\webrtc.lib
 ```
 
-The current adapter probe verifies the documented PeerConnection header is available.
-The following implementation step binds the connection state machine to the factory,
-creates `control-v1` and `bulk-v1` DataChannels, and forwards their bytes to the
-existing `Transport` contract.
+This validation deliberately does **not** include WebRTC C++ headers in the MSVC-built
+engine. The static library is produced by WebRTC's pinned GN/clang-cl toolchain and
+uses its own C++ runtime settings; consuming its C++ API directly from the engine
+would create an unsupported ABI boundary. The next adapter target is therefore built
+by GN with the same toolchain and exposes a narrow C ABI / PImpl boundary to
+`engine/transport`. It will create `control-v1` and `bulk-v1` DataChannels and forward
+their bytes to the existing `Transport` contract.
 
 ## Tracker and TURN
 

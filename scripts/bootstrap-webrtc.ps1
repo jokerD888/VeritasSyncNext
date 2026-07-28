@@ -3,6 +3,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$env:DEPOT_TOOLS_WIN_TOOLCHAIN = '0'
 $lockPath = Join-Path $PSScriptRoot '..\third_party\libwebrtc.lock'
 $lock = Get-Content -Raw $lockPath
 if ($lock -notmatch 'commit = "([0-9a-f]{40})"') { throw "Invalid libwebrtc lock file: $lockPath" }
