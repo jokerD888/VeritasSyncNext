@@ -39,9 +39,12 @@ is a narrow C ABI boundary and its runtime test calls the real DataChannel send-
 API, creates/destroys a PeerConnectionFactory, and creates ordered `control-v1` plus
 unordered `bulk-v1` channels. It also produces a real SDP offer containing the data
 channel media section, applies it to a second local PeerConnection, receives the SDP
-answer, and applies that answer back to the initiator. ICE candidate relay and
-DataChannel payload forwarding still remain before this is a complete signaling
-implementation.
+answer, applies that answer back to the initiator, then forwards the gathered ICE
+candidates in both directions. The local test verifies the signaling exchange and
+candidate acceptance; opening a channel still requires usable local network candidates.
+On this machine WebRTC currently selects the `Meta` virtual adapter, which does not
+produce a viable self-connection. A networked Tracker and engine-level `Transport`
+forwarding still remain before this is complete.
 
 The bridge script makes one local, reproducible build-graph change to the otherwise
 pinned checkout so GN emits the bridge target. Its source and patch both live in this
