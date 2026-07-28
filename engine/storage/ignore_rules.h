@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,6 +14,7 @@ class IgnoreRules {
   IgnoreRules();
 
   void Load(std::string_view text);
+  void LoadFile(const std::filesystem::path& task_root);
   [[nodiscard]] bool IsIgnored(std::string_view relative_path) const;
 
  private:

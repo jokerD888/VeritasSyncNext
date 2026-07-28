@@ -1,6 +1,10 @@
 #include "engine/storage/ignore_rules.h"
 #include "tests/test_framework.h"
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+
 VSYNC_TEST(IgnoreRulesApplyDefaultsAndNormalizeWindowsPaths) {
   veritassync::storage::IgnoreRules rules;
   VSYNC_CHECK(rules.IsIgnored("download.part"));
@@ -29,4 +33,15 @@ VSYNC_TEST(IgnoreRulesSupportRootedDoubleStarAndCharacterClassPatterns) {
   VSYNC_CHECK(!rules.IsIgnored("src/lib/generated2.cpp"));
   VSYNC_CHECK(rules.IsIgnored("build.tmp"));
   VSYNC_CHECK(!rules.IsIgnored("apple.tmp"));
+}
+
+VSYNC_TEST(IgnoreRulesLoadTaskRootFile) {
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("veritassync-ignore-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directory(root);
+  { std::ofstream stream(root / ".veritasignore"); stream << "*.generated\n"; }
+  veritassync::storage::IgnoreRules rules;
+  rules.LoadFile(root);
+  VSYNC_CHECK(rules.IsIgnored("build.generated"));
+  std::filesystem::remove_all(root);
 }

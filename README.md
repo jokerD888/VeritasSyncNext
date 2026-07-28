@@ -23,7 +23,10 @@ ctest --preset default
 
 ```powershell
 ./build/default/veritassync-engine --headless --db state.db --init-task demo --mode one_way --role source --root C:\sync
+./build/default/veritassync-engine --headless --db state.db --scan-task demo --device-id device-a
 ```
 
-The CLI only initializes durable state in this phase. See
+The scan command applies `.veritasignore`, computes BLAKE3 content hashes, and
+reconciles durable file records. The database path must stay outside the task root,
+so its WAL and temporary files can never be synchronized. See
 [`protocol/PROTOCOL_V1.md`](protocol/PROTOCOL_V1.md) for the wire contract.

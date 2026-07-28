@@ -12,6 +12,10 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     database.ApplyMigrations();
     VSYNC_CHECK(database.SchemaVersion() == 1);
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
+    const auto task = database.FindTask("task-1");
+    VSYNC_CHECK(task.has_value());
+    VSYNC_CHECK(task->root_path == "C:/sync");
+    VSYNC_CHECK(!database.FindTask("missing").has_value());
     VSYNC_CHECK(database.CountRows("tasks") == 1);
     VSYNC_CHECK(database.CountRows("file_records") == 0);
   }

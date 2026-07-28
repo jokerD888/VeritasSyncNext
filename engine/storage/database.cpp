@@ -123,6 +123,24 @@ void Database::CreateTask(const TaskDefinition& task) {
   const auto cleanup = [&] { sqlite3_finalize(statement); };
   try { Check(sqlite3_bind_text(statement, 1, task.task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind task id"); Check(sqlite3_bind_text(statement, 2, task.mode.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind task mode"); Check(sqlite3_bind_text(statement, 3, task.role.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind task role"); Check(sqlite3_bind_text(statement, 4, task.root_path.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind task root"); Check(sqlite3_step(statement), connection_, "insert task"); cleanup(); } catch (...) { cleanup(); throw; }
 }
+std::optional<TaskDefinition> Database::FindTask(const std::string& task_id) const {
+  if (task_id.empty()) throw std::invalid_argument("task id is required");
+  constexpr const char* sql = "SELECT mode, role, root_path FROM tasks WHERE task_id=?;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare task lookup");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind task lookup");
+    const int result = sqlite3_step(statement);
+    if (result == SQLITE_DONE) { cleanup(); return std::nullopt; }
+    Check(result, connection_, "read task");
+    TaskDefinition task{task_id, reinterpret_cast<const char*>(sqlite3_column_text(statement, 0)),
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 2))};
+    cleanup();
+    return task;
+  } catch (...) { cleanup(); throw; }
+}
 void Database::UpsertFileRecord(const FileRecord& record) {
   ValidateFileRecord(record);
   constexpr const char* sql = R"sql(

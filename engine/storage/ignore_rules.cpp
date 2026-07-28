@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 
@@ -186,6 +188,24 @@ void IgnoreRules::Load(const std::string_view text) {
     }
     begin = end + 1;
   }
+}
+
+void IgnoreRules::LoadFile(const std::filesystem::path& task_root) {
+  const auto path = task_root / ".veritasignore";
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream) {
+    std::error_code error;
+    if (std::filesystem::exists(path, error) || error) {
+      throw std::runtime_error("cannot read .veritasignore");
+    }
+    Load({});
+    return;
+  }
+  const std::string text{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+  if (stream.bad()) {
+    throw std::runtime_error("cannot read .veritasignore");
+  }
+  Load(text);
 }
 
 bool IgnoreRules::Matches(const Rule& rule, const std::string_view path) {

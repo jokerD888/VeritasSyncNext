@@ -42,6 +42,7 @@ class Database {
 
   void ApplyMigrations();
   void CreateTask(const TaskDefinition& task);
+  [[nodiscard]] std::optional<TaskDefinition> FindTask(const std::string& task_id) const;
   void UpsertFileRecord(const FileRecord& record);
   void RecordTombstone(std::string task_id, std::string relative_path,
                        std::string version_id, std::string origin_device_id,
