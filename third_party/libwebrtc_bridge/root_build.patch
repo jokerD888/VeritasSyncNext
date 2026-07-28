@@ -1,0 +1,16 @@
+diff --git a/BUILD.gn b/BUILD.gn
+index c3158f5b4..9e407459d 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -37,7 +37,10 @@ if (!build_with_chromium) {
+   # 'ninja default' and then 'ninja all', the second build should do no work.
+   group("default") {
+     testonly = true
+-    deps = [ ":webrtc" ]
++    deps = [
++      ":webrtc",
++      "//veritassync_bridge:veritassync_webrtc_bridge",
++    ]
+     if (rtc_build_examples) {
+       deps += [ "examples" ]
+     }

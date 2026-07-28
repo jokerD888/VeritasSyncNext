@@ -6,6 +6,7 @@ option(VERITASSYNC_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 option(VERITASSYNC_ENABLE_WEBRTC "Verify the pinned libwebrtc build required by the adapter" OFF)
 set(VERITASSYNC_WEBRTC_ROOT "" CACHE PATH "Pinned libwebrtc source checkout")
 set(VERITASSYNC_WEBRTC_LIBRARY "" CACHE FILEPATH "libwebrtc static library built from the pinned checkout")
+set(VERITASSYNC_WEBRTC_BRIDGE_LIBRARY "" CACHE FILEPATH "C ABI bridge DLL built from the pinned libwebrtc checkout")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,11 +33,15 @@ add_library(veritassync_engine
   engine/storage/database.cpp
   engine/transport/mock_transport.cpp
   engine/transport/connection_state.cpp
+  engine/transport/webrtc_bridge_loader.cpp
   engine/signaling/tracker_contract.cpp
   engine/sync/phase0_node.cpp
 )
 target_include_directories(veritassync_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(veritassync_engine PUBLIC unofficial::sqlite3::sqlite3)
+if(WIN32)
+  target_link_libraries(veritassync_engine PRIVATE kernel32)
+endif()
 
 veritassync_apply_warnings(veritassync_engine)
 
@@ -46,6 +51,10 @@ if(VERITASSYNC_ENABLE_WEBRTC)
   endif()
   if(NOT EXISTS "${VERITASSYNC_WEBRTC_LIBRARY}")
     message(FATAL_ERROR "VERITASSYNC_WEBRTC_LIBRARY must name the libwebrtc artifact from the pinned checkout")
+  endif()
+  if(NOT VERITASSYNC_WEBRTC_BRIDGE_LIBRARY STREQUAL "" AND
+     NOT EXISTS "${VERITASSYNC_WEBRTC_BRIDGE_LIBRARY}")
+    message(FATAL_ERROR "VERITASSYNC_WEBRTC_BRIDGE_LIBRARY must name the bridge DLL built by scripts/build-webrtc-bridge.ps1")
   endif()
   file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libwebrtc.lock" veritassync_webrtc_lock)
   string(REGEX MATCH "commit = \"[^\"]+\"" veritassync_webrtc_lock_match "${veritassync_webrtc_lock}")
@@ -80,7 +89,14 @@ if(BUILD_TESTING)
     tests/connection_state_test.cpp
     tests/tracker_contract_test.cpp
   )
+  if(VERITASSYNC_ENABLE_WEBRTC AND NOT VERITASSYNC_WEBRTC_BRIDGE_LIBRARY STREQUAL "")
+    target_sources(veritassync_tests PRIVATE tests/webrtc_bridge_loader_test.cpp)
+  endif()
   target_link_libraries(veritassync_tests PRIVATE veritassync_engine)
   veritassync_apply_warnings(veritassync_tests)
   add_test(NAME veritassync_tests COMMAND veritassync_tests)
+  if(VERITASSYNC_ENABLE_WEBRTC AND NOT VERITASSYNC_WEBRTC_BRIDGE_LIBRARY STREQUAL "")
+    set_tests_properties(veritassync_tests PROPERTIES
+      ENVIRONMENT "VERITASSYNC_WEBRTC_BRIDGE_LIBRARY=${VERITASSYNC_WEBRTC_BRIDGE_LIBRARY}")
+  endif()
 endif()

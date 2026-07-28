@@ -1,0 +1,8 @@
+import("//webrtc.gni")
+
+# This is deliberately a shared library with a C ABI. Keep libwebrtc C++ types
+# inside this target: the CMake-built engine must not cross the WebRTC C++ ABI.
+rtc_shared_library("veritassync_webrtc_bridge") {
+  sources = [ "veritassync_webrtc_bridge.cc" ]
+  deps = [ "//api:data_channel_interface" ]
+}

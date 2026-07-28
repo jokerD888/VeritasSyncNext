@@ -26,13 +26,23 @@ Verify the pinned checkout and its build artifact from the CMake project:
 cmake --preset default -DVERITASSYNC_ENABLE_WEBRTC=ON -DVERITASSYNC_WEBRTC_ROOT=D:\deps\webrtc\src -DVERITASSYNC_WEBRTC_LIBRARY=D:\deps\webrtc\src\out\veritassync\obj\webrtc.lib
 ```
 
-This validation deliberately does **not** include WebRTC C++ headers in the MSVC-built
-engine. The static library is produced by WebRTC's pinned GN/clang-cl toolchain and
-uses its own C++ runtime settings; consuming its C++ API directly from the engine
-would create an unsupported ABI boundary. The next adapter target is therefore built
-by GN with the same toolchain and exposes a narrow C ABI / PImpl boundary to
-`engine/transport`. It will create `control-v1` and `bulk-v1` DataChannels and forward
-their bytes to the existing `Transport` contract.
+Build the matching C ABI bridge with the same GN/clang-cl toolchain:
+
+```powershell
+./scripts/build-webrtc-bridge.ps1 -CheckoutRoot D:\deps\webrtc
+cmake --preset default -DVERITASSYNC_ENABLE_WEBRTC=ON -DVERITASSYNC_WEBRTC_ROOT=D:\deps\webrtc\src -DVERITASSYNC_WEBRTC_LIBRARY=D:\deps\webrtc\src\out\veritassync\obj\webrtc.lib -DVERITASSYNC_WEBRTC_BRIDGE_LIBRARY=D:\deps\webrtc\src\out\veritassync\veritassync_webrtc_bridge.dll
+ctest --test-dir build\default -C Debug --output-on-failure
+```
+
+This deliberately keeps WebRTC C++ headers out of the MSVC-built engine. The bridge
+is a narrow C ABI boundary and its runtime test calls the real DataChannel send-queue
+API. It is a toolchain/ABI smoke test, not a claim that PeerConnection signaling is
+complete. The next adapter revision will create `control-v1` and `bulk-v1` channels
+and forward their bytes to the existing `Transport` contract.
+
+The bridge script makes one local, reproducible build-graph change to the otherwise
+pinned checkout so GN emits the bridge target. Its source and patch both live in this
+repository; `third_party/libwebrtc.lock` remains the source revision authority.
 
 ## Tracker and TURN
 

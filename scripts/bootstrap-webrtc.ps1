@@ -20,7 +20,9 @@ try {
   Push-Location src
   try {
     git checkout $commit
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to check out the pinned libwebrtc commit' }
     gclient sync -D
+    if ($LASTEXITCODE -ne 0) { throw 'libwebrtc dependency synchronization failed' }
     Write-Host "Pinned libwebrtc checkout is ready at $PWD"
   } finally { Pop-Location }
 } finally { Pop-Location }
