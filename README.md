@@ -1,8 +1,13 @@
 # VeritasSyncNext
 
-Phase 0 is a C++20, headless synchronization-engine skeleton. It deliberately has no
-libwebrtc, Tauri, Tracker, or coturn dependency. The only concrete transport is an
-in-memory mock used to verify the protocol handshake and transfer boundary.
+VeritasSyncNext is a C++20, headless synchronization-engine implementation. Its
+current milestones provide the versioned protocol, durable SQLite state, a mock
+transport, and the Phase 1 libwebrtc bridge/signaling boundary. A production Tracker
+and cross-network WebRTC DataChannel validation remain pending.
+
+The storage layer also exposes a Phase 2 safety primitive: received files are written
+as same-directory `*.part` files, flushed, then atomically replaced under the task
+root. It rejects absolute paths and traversal before writing.
 
 ## Build and test
 
