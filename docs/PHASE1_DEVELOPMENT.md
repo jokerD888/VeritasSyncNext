@@ -37,7 +37,8 @@ ctest --test-dir build\default -C Debug --output-on-failure
 This deliberately keeps WebRTC C++ headers out of the MSVC-built engine. The bridge
 is a narrow C ABI boundary and its runtime test calls the real DataChannel send-queue
 API, creates/destroys a PeerConnectionFactory, and creates ordered `control-v1` plus
-unordered `bulk-v1` channels. It is a toolchain/ABI smoke test, not a claim that
+unordered `bulk-v1` channels. It also produces a real SDP offer containing the data
+channel media section. It is a toolchain/ABI smoke test, not a claim that
 PeerConnection signaling is complete. The next adapter revision will forward those
 channels' bytes to the existing `Transport` contract and exchange SDP/ICE through the
 Tracker.

@@ -1,11 +1,14 @@
 #include "veritassync_webrtc_bridge.h"
 
 #include <memory>
+#include <mutex>
+#include <string>
 
 #include "api/create_modular_peer_connection_factory.h"
 #include "api/data_channel_interface.h"
 #include "api/enable_media_with_defaults.h"
 #include "api/environment/environment_factory.h"
+#include "api/make_ref_counted.h"
 #include "api/peer_connection_interface.h"
 #include "rtc_base/ssl_adapter.h"
 #include "rtc_base/thread.h"
@@ -63,7 +66,42 @@ class FactoryHolder final {
            bulk_channel_->label() == "bulk-v1" && !bulk_channel_->ordered();
   }
 
+  void SetOfferCallback(VsyncWebRtcBridgeSdpCallback callback, void* context) {
+    std::scoped_lock lock(callback_mutex_);
+    offer_callback_ = callback;
+    offer_context_ = context;
+  }
+
+  [[nodiscard]] bool CreateOffer();
+
  private:
+  class SetLocalDescriptionObserver : public webrtc::SetSessionDescriptionObserver {
+   public:
+    void OnSuccess() override {}
+    void OnFailure(webrtc::RTCError) override {}
+  };
+
+  class OfferObserver : public webrtc::CreateSessionDescriptionObserver {
+   public:
+    explicit OfferObserver(FactoryHolder& owner) : owner_(owner) {}
+    void OnSuccess(webrtc::SessionDescriptionInterface* description) override {
+      std::string sdp;
+      description->ToString(&sdp);
+      owner_.peer_connection_->SetLocalDescription(
+          webrtc::make_ref_counted<SetLocalDescriptionObserver>().get(), description);
+      owner_.EmitOffer(sdp);
+    }
+    void OnFailure(webrtc::RTCError) override {}
+
+   private:
+    FactoryHolder& owner_;
+  };
+
+  void EmitOffer(const std::string& sdp) {
+    std::scoped_lock lock(callback_mutex_);
+    if (offer_callback_ != nullptr) offer_callback_(offer_context_, sdp.data(), static_cast<uint32_t>(sdp.size()));
+  }
+
   std::unique_ptr<webrtc::Thread> network_thread_;
   std::unique_ptr<webrtc::Thread> worker_thread_;
   std::unique_ptr<webrtc::Thread> signaling_thread_;
@@ -72,7 +110,17 @@ class FactoryHolder final {
   webrtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
   webrtc::scoped_refptr<webrtc::DataChannelInterface> control_channel_;
   webrtc::scoped_refptr<webrtc::DataChannelInterface> bulk_channel_;
+  std::mutex callback_mutex_;
+  VsyncWebRtcBridgeSdpCallback offer_callback_ = nullptr;
+  void* offer_context_ = nullptr;
 };
+
+bool FactoryHolder::CreateOffer() {
+  if (peer_connection_ == nullptr) return false;
+  peer_connection_->CreateOffer(webrtc::make_ref_counted<OfferObserver>(*this).get(),
+                                webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
+  return true;
+}
 }  // namespace
 
 extern "C" uint32_t VeritasSyncWebRtcBridgeAbiVersion(void) {
@@ -96,4 +144,14 @@ extern "C" void VeritasSyncWebRtcBridgeDestroyFactory(void* factory) {
 extern "C" uint32_t VeritasSyncWebRtcBridgeCreateProtocolChannels(void* factory) {
   if (factory == nullptr) return 0;
   return static_cast<FactoryHolder*>(factory)->CreateProtocolChannels() ? 1U : 0U;
+}
+
+extern "C" void VeritasSyncWebRtcBridgeSetOfferCallback(
+    void* factory, VsyncWebRtcBridgeSdpCallback callback, void* context) {
+  if (factory != nullptr) static_cast<FactoryHolder*>(factory)->SetOfferCallback(callback, context);
+}
+
+extern "C" uint32_t VeritasSyncWebRtcBridgeCreateOffer(void* factory) {
+  if (factory == nullptr) return 0;
+  return static_cast<FactoryHolder*>(factory)->CreateOffer() ? 1U : 0U;
 }
