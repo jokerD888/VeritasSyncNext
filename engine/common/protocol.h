@@ -43,7 +43,7 @@ struct Chunk {
   std::array<std::uint8_t, 32> chunk_hash;
   std::vector<std::uint8_t> bytes;
 };
-struct ChunkRange { std::uint64_t first_chunk; std::uint32_t chunk_count; };
+struct ChunkRange { std::uint64_t first_chunk; std::uint32_t chunk_count; bool operator==(const ChunkRange&) const = default; };
 struct FileRequest { std::array<std::uint8_t, 16> transfer_id; std::array<std::uint8_t, 32> file_hash; std::vector<ChunkRange> missing_ranges; };
 
 [[nodiscard]] bool IsAllowedOn(Channel channel, FrameType type);

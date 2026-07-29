@@ -18,6 +18,8 @@ VSYNC_TEST(DownloadReceiverMarksOnlyVerifiedWrittenChunksAndCommits) {
     const std::vector<std::uint8_t> first{'a','b'}, second{'c','d'};
     VSYNC_CHECK_THROWS(receiver.AcceptChunk(0, 0, first, veritassync::common::Blake3(second), 2));
     receiver.AcceptChunk(1, 2, second, veritassync::common::Blake3(second), 3);
+    const auto resume = receiver.ResumeRequest();
+    VSYNC_CHECK(resume.missing_ranges == std::vector<veritassync::protocol::ChunkRange>({{0, 1}}));
     VSYNC_CHECK_THROWS(receiver.Commit(4));
     receiver.AcceptChunk(0, 0, first, veritassync::common::Blake3(first), 4);
     receiver.Commit(5);

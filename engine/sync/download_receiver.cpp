@@ -1,6 +1,7 @@
 #include "engine/sync/download_receiver.h"
 
 #include "engine/common/content_hash.h"
+#include "engine/sync/resume_request.h"
 
 #include <stdexcept>
 #include <utility>
@@ -22,6 +23,9 @@ void DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::u
   }
   writer_.WritePartialChunk(relative_path_, offset, bytes);
   database_.MarkTransferChunkCompleted(transfer_id_, chunk_index, updated_at_ms);
+}
+protocol::FileRequest DownloadReceiver::ResumeRequest() const {
+  return BuildResumeRequest(transfer_id_, expected_hash_, chunk_count_, database_);
 }
 void DownloadReceiver::Commit(const std::int64_t completed_at_ms) {
   const auto completed = database_.CompletedTransferChunks(transfer_id_);
