@@ -3,6 +3,7 @@
 #include "engine/storage/manifest_scanner.h"
 #include "engine/common/uuid.h"
 #include "engine/sync/snapshot_reconciler.h"
+#include "engine/sync/task_policy.h"
 
 #include <chrono>
 #include <filesystem>
@@ -62,6 +63,7 @@ int main(int argc, char** argv) {
       if (device_id.empty()) throw std::invalid_argument("--scan-task requires --device-id");
       const auto task = database.FindTask(scan_task_id);
       if (!task.has_value()) throw std::invalid_argument("scan task does not exist");
+      if (!veritassync::sync::CanScanLocalChanges(*task)) throw std::invalid_argument("one-way target tasks cannot scan local changes");
       RequireDatabaseOutsideTaskRoot(std::filesystem::path(db_path), std::filesystem::path(task->root_path));
       veritassync::storage::IgnoreRules rules;
       rules.LoadFile(std::filesystem::path(task->root_path));

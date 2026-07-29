@@ -46,6 +46,7 @@ add_library(veritassync_engine
   engine/sync/download_receiver.cpp
   engine/sync/chunk_source.cpp
   engine/sync/upload_session.cpp
+  engine/sync/task_policy.cpp
   engine/sync/resume_request.cpp
   engine/sync/snapshot_reconciler.cpp
   engine/sync/phase0_node.cpp
@@ -107,6 +108,7 @@ if(BUILD_TESTING)
     tests/download_receiver_test.cpp
     tests/chunk_source_test.cpp
     tests/upload_session_test.cpp
+    tests/task_policy_test.cpp
     tests/resume_request_test.cpp
     tests/snapshot_reconciler_test.cpp
     tests/safe_file_writer_test.cpp
