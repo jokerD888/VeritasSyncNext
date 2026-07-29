@@ -45,3 +45,10 @@ VSYNC_TEST(IgnoreRulesLoadTaskRootFile) {
   VSYNC_CHECK(rules.IsIgnored("build.generated"));
   std::filesystem::remove_all(root);
 }
+
+VSYNC_TEST(IgnoreRulesTreatEscapedCommentAndBangAsLiteralPatterns) {
+  veritassync::storage::IgnoreRules rules;
+  rules.Load("\\!important.txt\n\\#private.txt\n");
+  VSYNC_CHECK(rules.IsIgnored("!important.txt"));
+  VSYNC_CHECK(rules.IsIgnored("#private.txt"));
+}

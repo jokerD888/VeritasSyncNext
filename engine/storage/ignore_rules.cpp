@@ -165,7 +165,9 @@ void IgnoreRules::Load(const std::string_view text) {
       line.erase(last + 1);
       if (!line.empty() && line.front() != '#') {
         Rule rule;
-        rule.negated = line.front() == '!';
+        const bool escaped_bang = line.starts_with("\\!");
+        if (escaped_bang || line.starts_with("\\#")) line.erase(0, 1);
+        rule.negated = !escaped_bang && line.front() == '!';
         if (rule.negated) {
           line.erase(0, 1);
         }
