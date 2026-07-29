@@ -3,6 +3,7 @@
 #include "engine/common/content_hash.h"
 #include "engine/sync/resume_request.h"
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -19,7 +20,10 @@ void DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::u
                                    const std::span<const std::uint8_t> bytes, const common::ContentHash& chunk_hash,
                                    const std::int64_t updated_at_ms) {
   if (cancelled_) throw std::logic_error("download is cancelled");
-  if (chunk_index >= chunk_count_ || common::Blake3(bytes) != chunk_hash) {
+  const auto expected_offset = chunk_index * protocol::kLogicalChunkSize;
+  const auto expected_length = expected_offset < expected_size_ ?
+      std::min<std::uint64_t>(protocol::kLogicalChunkSize, expected_size_ - expected_offset) : 0;
+  if (chunk_index >= chunk_count_ || offset != expected_offset || bytes.size() != expected_length || common::Blake3(bytes) != chunk_hash) {
     throw std::invalid_argument("download chunk is invalid");
   }
   writer_.WritePartialChunk(relative_path_, offset, bytes);
