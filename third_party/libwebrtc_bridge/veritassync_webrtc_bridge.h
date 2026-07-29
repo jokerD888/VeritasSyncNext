@@ -47,6 +47,8 @@ VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeApplyRemoteIceCandida
     const char* candidate, uint32_t candidate_length);
 VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeSendControl(
     void* factory, const uint8_t* bytes, uint32_t length);
+VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeSendBulk(
+    void* factory, const uint8_t* bytes, uint32_t length);
 VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeControlChannelState(void* factory);
 VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeConnectionState(void* factory);
 

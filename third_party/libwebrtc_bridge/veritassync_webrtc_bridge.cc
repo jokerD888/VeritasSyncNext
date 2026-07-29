@@ -114,6 +114,10 @@ class FactoryHolder final {
     if (control_channel_ == nullptr || bytes == nullptr || length == 0) return false;
     return control_channel_->Send(webrtc::DataBuffer(webrtc::CopyOnWriteBuffer(bytes, length), true));
   }
+  [[nodiscard]] bool SendBulk(const uint8_t* bytes, uint32_t length) {
+    if (bulk_channel_ == nullptr || bytes == nullptr || length == 0) return false;
+    return bulk_channel_->Send(webrtc::DataBuffer(webrtc::CopyOnWriteBuffer(bytes, length), true));
+  }
   [[nodiscard]] uint32_t ControlChannelState() const {
     if (control_channel_ == nullptr) return 0;
     return static_cast<uint32_t>(control_channel_->state()) + 1U;
@@ -408,6 +412,11 @@ extern "C" uint32_t VeritasSyncWebRtcBridgeSendControl(
     void* factory, const uint8_t* bytes, uint32_t length) {
   if (factory == nullptr) return 0;
   return static_cast<FactoryHolder*>(factory)->SendControl(bytes, length) ? 1U : 0U;
+}
+extern "C" uint32_t VeritasSyncWebRtcBridgeSendBulk(
+    void* factory, const uint8_t* bytes, uint32_t length) {
+  if (factory == nullptr) return 0;
+  return static_cast<FactoryHolder*>(factory)->SendBulk(bytes, length) ? 1U : 0U;
 }
 
 extern "C" uint32_t VeritasSyncWebRtcBridgeControlChannelState(void* factory) {
