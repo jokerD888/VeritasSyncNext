@@ -61,6 +61,7 @@ VSYNC_TEST(DatabasePersistsCompletedTransferChunksForResume) {
     veritassync::storage::TransferId transfer_id{};
     transfer_id.front() = 42;
     database.CreateTransfer({transfer_id, "task-1", "device-b", "download", std::vector<std::uint8_t>(32, 7), "active", 100, 100});
+    VSYNC_CHECK_THROWS(database.CreateTransfer({{}, "task-1", "device-b", "download", std::vector<std::uint8_t>(32, 7), "unknown", 100, 100}));
     database.MarkTransferChunkCompleted(transfer_id, 3, 101);
     database.MarkTransferChunkCompleted(transfer_id, 0, 102);
     database.MarkTransferChunkCompleted(transfer_id, 3, 103);

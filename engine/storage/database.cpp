@@ -104,7 +104,8 @@ void ValidateFileRecord(const FileRecord& record) {
 void ValidateTransfer(const TransferRecord& transfer) {
   if (transfer.task_id.empty() || transfer.peer_device_id.empty() ||
       (transfer.direction != "upload" && transfer.direction != "download") ||
-      transfer.file_hash.empty() || transfer.state.empty() || transfer.created_at_ms <= 0 || transfer.updated_at_ms <= 0) {
+      transfer.file_hash.empty() || (transfer.state != "active" && transfer.state != "completed" &&
+      transfer.state != "failed" && transfer.state != "cancelled") || transfer.created_at_ms <= 0 || transfer.updated_at_ms <= 0) {
     throw std::invalid_argument("transfer fields are invalid");
   }
 }
