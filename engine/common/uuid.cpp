@@ -26,5 +26,10 @@ std::string NewUuidV4() {
   }
   return result;
 }
+std::array<std::uint8_t, 16> NewTransferId() {
+  std::array<std::uint8_t, 16> result{};
+  if (::BCryptGenRandom(nullptr, result.data(), static_cast<ULONG>(result.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) throw std::runtime_error("cannot generate transfer randomness");
+  return result;
+}
 
 }  // namespace veritassync::common
