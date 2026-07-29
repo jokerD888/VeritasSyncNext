@@ -4,6 +4,7 @@
 
 #include <stdexcept>
 #include <limits>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -102,9 +103,10 @@ void ValidateFileRecord(const FileRecord& record) {
 }
 
 void ValidateTransfer(const TransferRecord& transfer) {
+  const bool empty_id = std::ranges::all_of(transfer.transfer_id, [](const auto byte) { return byte == 0; });
   if (transfer.task_id.empty() || transfer.peer_device_id.empty() ||
       (transfer.direction != "upload" && transfer.direction != "download") ||
-      transfer.file_hash.empty() || (transfer.state != "active" && transfer.state != "completed" &&
+      empty_id || transfer.file_hash.size() != 32 || (transfer.state != "active" && transfer.state != "completed" &&
       transfer.state != "failed" && transfer.state != "cancelled") || transfer.created_at_ms <= 0 || transfer.updated_at_ms <= 0) {
     throw std::invalid_argument("transfer fields are invalid");
   }
