@@ -28,3 +28,13 @@ VSYNC_TEST(DownloadReceiverMarksOnlyVerifiedWrittenChunksAndCommits) {
   }
   std::filesystem::remove_all(root); std::filesystem::remove(db_path); std::filesystem::remove(db_path.string()+"-wal"); std::filesystem::remove(db_path.string()+"-shm");
 }
+
+VSYNC_TEST(DownloadReceiverPersistsCancellationAndStopsReceiving) {
+  const auto root = std::filesystem::temp_directory_path() / "veritassync-download-cancel"; std::filesystem::create_directory(root);
+  const auto db_path = root.parent_path() / "veritassync-download-cancel.db";
+  { veritassync::storage::Database db(db_path); db.ApplyMigrations(); db.CreateTask({"task", "one_way", "target", root.string()}); veritassync::storage::TransferId id{}; id[0]=2;
+    const std::vector<std::uint8_t> bytes{'x'}; const auto hash=veritassync::common::Blake3(bytes); db.CreateTransfer({id,"task","peer","download",std::vector<std::uint8_t>(hash.begin(),hash.end()),"active",1,1});
+    veritassync::storage::SafeFileWriter writer(root); veritassync::sync::DownloadReceiver receiver(db,id,writer,"x",1,hash,1);
+    receiver.Cancel({id,"source_changed"},2); VSYNC_CHECK(db.TransferState(id)==std::optional<std::string>{"cancelled"}); VSYNC_CHECK_THROWS(receiver.ResumeRequest()); }
+  std::filesystem::remove_all(root); std::filesystem::remove(db_path); std::filesystem::remove(db_path.string()+"-wal"); std::filesystem::remove(db_path.string()+"-shm");
+}

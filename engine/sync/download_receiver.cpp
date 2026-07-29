@@ -18,6 +18,7 @@ DownloadReceiver::DownloadReceiver(storage::Database& database, const storage::T
 void DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::uint64_t offset,
                                    const std::span<const std::uint8_t> bytes, const common::ContentHash& chunk_hash,
                                    const std::int64_t updated_at_ms) {
+  if (cancelled_) throw std::logic_error("download is cancelled");
   if (chunk_index >= chunk_count_ || common::Blake3(bytes) != chunk_hash) {
     throw std::invalid_argument("download chunk is invalid");
   }
@@ -25,9 +26,16 @@ void DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::u
   database_.MarkTransferChunkCompleted(transfer_id_, chunk_index, updated_at_ms);
 }
 protocol::FileRequest DownloadReceiver::ResumeRequest() const {
+  if (cancelled_) throw std::logic_error("download is cancelled");
   return BuildResumeRequest(transfer_id_, expected_hash_, chunk_count_, database_);
 }
+void DownloadReceiver::Cancel(const protocol::Cancel& cancel, const std::int64_t cancelled_at_ms) {
+  if (cancel.transfer_id != transfer_id_) throw std::invalid_argument("cancel does not match transfer");
+  database_.UpdateTransferState(transfer_id_, "cancelled", cancelled_at_ms, cancel.reason);
+  cancelled_ = true;
+}
 void DownloadReceiver::Commit(const std::int64_t completed_at_ms) {
+  if (cancelled_) throw std::logic_error("download is cancelled");
   const auto completed = database_.CompletedTransferChunks(transfer_id_);
   if (completed.size() != chunk_count_) throw std::logic_error("download has missing chunks");
   for (std::uint64_t index = 0; index < chunk_count_; ++index) {

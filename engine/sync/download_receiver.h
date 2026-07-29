@@ -19,6 +19,7 @@ class DownloadReceiver {
                    std::span<const std::uint8_t> bytes, const common::ContentHash& chunk_hash,
                    std::int64_t updated_at_ms);
   [[nodiscard]] protocol::FileRequest ResumeRequest() const;
+  void Cancel(const protocol::Cancel& cancel, std::int64_t cancelled_at_ms);
   void Commit(std::int64_t completed_at_ms);
 
  private:
@@ -29,6 +30,7 @@ class DownloadReceiver {
   std::uint64_t expected_size_;
   common::ContentHash expected_hash_;
   std::uint64_t chunk_count_;
+  bool cancelled_ = false;
 };
 
 }  // namespace veritassync::sync
