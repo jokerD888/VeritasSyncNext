@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -75,4 +76,11 @@ VSYNC_TEST(SafeFileWriterResumesChunksThenVerifiesBeforeCommit) {
   writer.CommitPartial("nested/file.bin", expected.size(), veritassync::common::Blake3(expected));
   VSYNC_CHECK(ReadBytes(directory.Path() / "nested" / "file.bin") == expected);
   VSYNC_CHECK(!std::filesystem::exists(directory.Path() / "nested" / "file.bin.part"));
+}
+
+VSYNC_TEST(SafeFileWriterRejectsOverflowingChunkRange) {
+  TemporaryDirectory directory;
+  veritassync::storage::SafeFileWriter writer(directory.Path());
+  const std::vector<std::uint8_t> bytes{1, 2};
+  VSYNC_CHECK_THROWS(writer.WritePartialChunk("file.bin", (std::numeric_limits<std::uint64_t>::max)() - 1, bytes));
 }

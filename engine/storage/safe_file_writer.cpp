@@ -158,6 +158,9 @@ void SafeFileWriter::WritePartialChunk(const std::string_view relative_path, con
   if (offset > static_cast<std::uint64_t>((std::numeric_limits<std::streamoff>::max)())) {
     throw std::invalid_argument("chunk offset is too large");
   }
+  if (bytes.size() > (std::numeric_limits<std::uint64_t>::max)() - offset) {
+    throw std::invalid_argument("chunk range overflows");
+  }
   const auto destination = ResolveTaskPath(task_root_, relative_path);
   EnsureSafeDirectory(destination.parent_path());
   RejectSymlink(destination, "destination file must not be a symlink");
