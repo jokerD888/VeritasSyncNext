@@ -48,5 +48,6 @@ VSYNC_TEST(ManifestScannerHashesFilesAndPreservesEmptyDirectories) {
   VSYNC_CHECK(snapshot[0].kind == veritassync::storage::SnapshotKind::kDirectory);
   VSYNC_CHECK(snapshot[1].relative_path == "generated/keep.txt");
   VSYNC_CHECK(snapshot[2].relative_path == "notes.txt");
+  VSYNC_CHECK(snapshot[2].mtime_ns > 0);
   VSYNC_CHECK(snapshot[2].content_hash == std::optional{veritassync::common::Blake3(std::vector<std::uint8_t>{'a', 'b', 'c'})});
 }

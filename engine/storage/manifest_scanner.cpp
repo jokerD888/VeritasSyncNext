@@ -14,7 +14,9 @@ namespace {
 }
 
 [[nodiscard]] std::int64_t TimestampNanoseconds(const std::filesystem::file_time_type time) {
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count();
+  const auto system_time = std::chrono::time_point_cast<std::chrono::nanoseconds>(
+      time - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(system_time.time_since_epoch()).count();
 }
 
 }  // namespace
