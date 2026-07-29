@@ -53,8 +53,9 @@ chunk_hash[32] | bytes[chunk_length]
 
 The initial logical chunk target is 256 KiB. A future DataChannel adapter may slice
 an encoded chunk to meet its message limit, but must reconstruct this application
-frame before handing it to the engine. A receiver verifies that `chunk_length` equals
-the remaining payload size and that the chunk hash matches its bytes before writing.
+frame before handing it to the engine. `chunk_hash` is BLAKE3(bytes); a receiver
+verifies that `chunk_length` equals the remaining payload size and that the chunk hash
+matches its bytes before writing.
 
 ## FILE_REQUEST v1 payload
 
