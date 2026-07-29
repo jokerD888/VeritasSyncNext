@@ -2,6 +2,7 @@
 
 #include "engine/common/protocol.h"
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -24,17 +25,28 @@ struct RelayMessage {
   std::string sender_device_id;
   std::string recipient_device_id;
   std::string payload;
+  std::string candidate_mid;
+  std::int32_t candidate_mline_index = -1;
 };
 
-// Contract model used by the engine and tracker implementations. The Phase 1 test
-// double validates the same admission and forwarding rules as the network service.
-class TrackerRoom {
+// The engine depends on this relay boundary; a WSS Tracker client can replace the
+// in-memory contract model without leaking its protocol into transport code.
+class SignalingRelay {
+ public:
+  virtual ~SignalingRelay() = default;
+  virtual void Forward(const RelayMessage& message) = 0;
+  [[nodiscard]] virtual std::vector<RelayMessage> DrainInbox(const std::string& device_id) = 0;
+};
+
+// Contract model used by the engine tests. It validates the same admission and
+// forwarding rules required from the future Tracker network service.
+class TrackerRoom final : public SignalingRelay {
  public:
   TrackerRoom(std::string task_id, Topology topology);
   void Join(const JoinRequest& request);
-  void Forward(const RelayMessage& message);
+  void Forward(const RelayMessage& message) override;
   [[nodiscard]] std::vector<std::string> Members() const;
-  [[nodiscard]] std::vector<RelayMessage> DrainInbox(const std::string& device_id);
+  [[nodiscard]] std::vector<RelayMessage> DrainInbox(const std::string& device_id) override;
 
  private:
   [[nodiscard]] bool HasMember(const std::string& device_id) const;

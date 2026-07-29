@@ -126,6 +126,12 @@ class FactoryHolder final {
     if (peer_connection_ == nullptr) return 0;
     return static_cast<uint32_t>(peer_connection_->peer_connection_state()) + 1U;
   }
+  [[nodiscard]] bool IsReady() const {
+    return peer_connection_ != nullptr &&
+           peer_connection_->peer_connection_state() == webrtc::PeerConnectionInterface::PeerConnectionState::kConnected &&
+           control_channel_ != nullptr && control_channel_->state() == webrtc::DataChannelInterface::kOpen &&
+           bulk_channel_ != nullptr && bulk_channel_->state() == webrtc::DataChannelInterface::kOpen;
+  }
 
   ~FactoryHolder() {
     if (control_channel_ != nullptr) control_channel_->UnregisterObserver();
@@ -427,4 +433,9 @@ extern "C" uint32_t VeritasSyncWebRtcBridgeControlChannelState(void* factory) {
 extern "C" uint32_t VeritasSyncWebRtcBridgeConnectionState(void* factory) {
   if (factory == nullptr) return 0;
   return static_cast<FactoryHolder*>(factory)->ConnectionState();
+}
+
+extern "C" uint32_t VeritasSyncWebRtcBridgeIsReady(void* factory) {
+  if (factory == nullptr) return 0;
+  return static_cast<FactoryHolder*>(factory)->IsReady() ? 1U : 0U;
 }

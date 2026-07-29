@@ -14,7 +14,7 @@ VSYNC_TEST(TrackerContractForwardsOfferAnswerAndCandidates) {
   room.Join(Join("node-b", protocol::Role::kPeer));
   room.Forward({signaling::MessageKind::kOffer, "node-a", "node-b", "v=0\r\n..."});
   room.Forward({signaling::MessageKind::kAnswer, "node-b", "node-a", "v=0\r\n..."});
-  room.Forward({signaling::MessageKind::kIceCandidate, "node-a", "node-b", "candidate:1"});
+  room.Forward({signaling::MessageKind::kIceCandidate, "node-a", "node-b", "candidate:1", "0", 0});
   const auto a_messages = room.DrainInbox("node-a");
   const auto b_messages = room.DrainInbox("node-b");
   VSYNC_CHECK(a_messages.size() == 1);
@@ -22,6 +22,8 @@ VSYNC_TEST(TrackerContractForwardsOfferAnswerAndCandidates) {
   VSYNC_CHECK(b_messages.size() == 2);
   VSYNC_CHECK(b_messages[0].kind == signaling::MessageKind::kOffer);
   VSYNC_CHECK(b_messages[1].kind == signaling::MessageKind::kIceCandidate);
+  VSYNC_CHECK(b_messages[1].candidate_mid == "0");
+  VSYNC_CHECK(b_messages[1].candidate_mline_index == 0);
 }
 
 VSYNC_TEST(TrackerContractEnforcesTopologyAdmission) {

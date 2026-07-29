@@ -21,9 +21,12 @@ using SdpCallback = void(__cdecl*)(void*, const char*, std::uint32_t);
 using SetSdpCallbackFunction = void(__cdecl*)(void*, SdpCallback, void*);
 using IceCallback = void(__cdecl*)(void*, const char*, std::uint32_t, std::int32_t, const char*, std::uint32_t);
 using SetIceCallbackFunction = void(__cdecl*)(void*, IceCallback, void*);
+using CompletionCallback = void(__cdecl*)(void*, std::uint32_t);
+using SetCompletionCallbackFunction = void(__cdecl*)(void*, CompletionCallback, void*);
 using CreateOfferFunction = std::uint32_t(__cdecl*)(void*);
 using ApplySdpFunction = std::uint32_t(__cdecl*)(void*, const char*, std::uint32_t);
 using ApplyIceFunction = std::uint32_t(__cdecl*)(void*, const char*, std::uint32_t, std::int32_t, const char*, std::uint32_t);
+using IsReadyFunction = std::uint32_t(__cdecl*)(void*);
 template <typename Function> Function Lookup(const HMODULE module, const char* const name) {
   const auto address = GetProcAddress(module, name);
   if (address == nullptr) throw std::runtime_error(std::string("WebRTC bridge is missing ") + name);
@@ -47,12 +50,15 @@ WebRtcTransport::WebRtcTransport(const std::filesystem::path& bridge_path) {
     Lookup<SetSdpCallbackFunction>(module, "VeritasSyncWebRtcBridgeSetOfferCallback")(factory_, ReceiveOffer, this);
     Lookup<SetSdpCallbackFunction>(module, "VeritasSyncWebRtcBridgeSetAnswerCallback")(factory_, ReceiveAnswer, this);
     Lookup<SetIceCallbackFunction>(module, "VeritasSyncWebRtcBridgeSetIceCallback")(factory_, ReceiveIce, this);
+    Lookup<SetCompletionCallbackFunction>(module, "VeritasSyncWebRtcBridgeSetRemoteDescriptionCallback")(
+        factory_, ReceiveRemoteDescription, this);
     send_control_ = reinterpret_cast<void*>(Lookup<SendFunction>(module, "VeritasSyncWebRtcBridgeSendControl"));
     send_bulk_ = reinterpret_cast<void*>(Lookup<SendFunction>(module, "VeritasSyncWebRtcBridgeSendBulk"));
     create_offer_ = reinterpret_cast<void*>(Lookup<CreateOfferFunction>(module, "VeritasSyncWebRtcBridgeCreateOffer"));
     apply_offer_ = reinterpret_cast<void*>(Lookup<ApplySdpFunction>(module, "VeritasSyncWebRtcBridgeApplyRemoteOffer"));
     apply_answer_ = reinterpret_cast<void*>(Lookup<ApplySdpFunction>(module, "VeritasSyncWebRtcBridgeApplyRemoteAnswer"));
     apply_ice_ = reinterpret_cast<void*>(Lookup<ApplyIceFunction>(module, "VeritasSyncWebRtcBridgeApplyRemoteIceCandidate"));
+    is_ready_ = reinterpret_cast<void*>(Lookup<IsReadyFunction>(module, "VeritasSyncWebRtcBridgeIsReady"));
   } catch (...) {
     if (factory_ != nullptr && destroy_ != nullptr) reinterpret_cast<DestroyFunction>(destroy_)(factory_);
     FreeLibrary(static_cast<HMODULE>(module_));
@@ -72,10 +78,12 @@ void WebRtcTransport::SetReceiveCallback(ReceiveCallback callback) { std::scoped
 void WebRtcTransport::SetOfferCallback(SdpCallback callback) { std::scoped_lock lock(callback_mutex_); offer_callback_ = std::move(callback); }
 void WebRtcTransport::SetAnswerCallback(SdpCallback callback) { std::scoped_lock lock(callback_mutex_); answer_callback_ = std::move(callback); }
 void WebRtcTransport::SetIceCallback(IceCallback callback) { std::scoped_lock lock(callback_mutex_); ice_callback_ = std::move(callback); }
+void WebRtcTransport::SetRemoteDescriptionCallback(RemoteDescriptionCallback callback) { std::scoped_lock lock(callback_mutex_); remote_description_callback_ = std::move(callback); }
 void WebRtcTransport::CreateOffer() { if (reinterpret_cast<CreateOfferFunction>(create_offer_)(factory_) != 1U) throw std::runtime_error("WebRTC could not create offer"); }
 void WebRtcTransport::ApplyRemoteOffer(std::string sdp) { if (reinterpret_cast<ApplySdpFunction>(apply_offer_)(factory_, sdp.data(), static_cast<std::uint32_t>(sdp.size())) != 1U) throw std::runtime_error("WebRTC rejected remote offer"); }
 void WebRtcTransport::ApplyRemoteAnswer(std::string sdp) { if (reinterpret_cast<ApplySdpFunction>(apply_answer_)(factory_, sdp.data(), static_cast<std::uint32_t>(sdp.size())) != 1U) throw std::runtime_error("WebRTC rejected remote answer"); }
 void WebRtcTransport::ApplyRemoteIceCandidate(const IceCandidate& candidate) { if (reinterpret_cast<ApplyIceFunction>(apply_ice_)(factory_, candidate.mid.data(), static_cast<std::uint32_t>(candidate.mid.size()), candidate.mline_index, candidate.candidate.data(), static_cast<std::uint32_t>(candidate.candidate.size())) != 1U) throw std::runtime_error("WebRTC rejected remote ICE candidate"); }
+bool WebRtcTransport::IsReady() const { return reinterpret_cast<IsReadyFunction>(is_ready_)(factory_) == 1U; }
 void __cdecl WebRtcTransport::Receive(void* context, const std::uint32_t channel, const std::uint8_t* bytes, const std::uint32_t length) {
   auto* const self = static_cast<WebRtcTransport*>(context);
   ReceiveCallback callback;
@@ -87,4 +95,5 @@ void __cdecl WebRtcTransport::Receive(void* context, const std::uint32_t channel
 void __cdecl WebRtcTransport::ReceiveOffer(void* context, const char* sdp, const std::uint32_t length) { auto* self=static_cast<WebRtcTransport*>(context); SdpCallback callback; { std::scoped_lock lock(self->callback_mutex_); callback=self->offer_callback_; } if (callback!=nullptr) callback(std::string(sdp,length)); }
 void __cdecl WebRtcTransport::ReceiveAnswer(void* context, const char* sdp, const std::uint32_t length) { auto* self=static_cast<WebRtcTransport*>(context); SdpCallback callback; { std::scoped_lock lock(self->callback_mutex_); callback=self->answer_callback_; } if (callback!=nullptr) callback(std::string(sdp,length)); }
 void __cdecl WebRtcTransport::ReceiveIce(void* context, const char* mid, const std::uint32_t mid_length, const std::int32_t index, const char* candidate, const std::uint32_t candidate_length) { auto* self=static_cast<WebRtcTransport*>(context); IceCallback callback; { std::scoped_lock lock(self->callback_mutex_); callback=self->ice_callback_; } if(callback!=nullptr) callback({std::string(mid,mid_length),index,std::string(candidate,candidate_length)}); }
+void __cdecl WebRtcTransport::ReceiveRemoteDescription(void* context, const std::uint32_t success) { auto* self=static_cast<WebRtcTransport*>(context); RemoteDescriptionCallback callback; { std::scoped_lock lock(self->callback_mutex_); callback=self->remote_description_callback_; } if (callback != nullptr) callback(success == 1U); }
 }  // namespace veritassync::transport

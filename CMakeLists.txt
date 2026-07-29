@@ -43,6 +43,7 @@ add_library(veritassync_engine
   engine/transport/webrtc_bridge_loader.cpp
   engine/transport/webrtc_transport.cpp
   engine/signaling/tracker_contract.cpp
+  engine/signaling/signaling_session.cpp
   engine/sync/manifest_diff.cpp
   engine/sync/download_receiver.cpp
   engine/sync/chunk_source.cpp
