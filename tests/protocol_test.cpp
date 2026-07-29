@@ -29,3 +29,10 @@ VSYNC_TEST(ProtocolRejectsMalformedAndTamperedChunks) {
   payload.back() = 99;
   VSYNC_CHECK_THROWS(DecodeChunk(payload));
 }
+
+VSYNC_TEST(ProtocolRoundTripsOrderedMissingChunkRanges) {
+  veritassync::protocol::FileRequest request{}; request.transfer_id[0] = 1; request.file_hash[0] = 2; request.missing_ranges = {{0, 2}, {5, 3}};
+  const auto decoded = veritassync::protocol::DecodeFileRequest(veritassync::protocol::EncodeFileRequest(request));
+  VSYNC_CHECK(decoded.transfer_id == request.transfer_id); VSYNC_CHECK(decoded.file_hash == request.file_hash); VSYNC_CHECK(decoded.missing_ranges.size() == 2); VSYNC_CHECK(decoded.missing_ranges[1].first_chunk == 5);
+  VSYNC_CHECK_THROWS(veritassync::protocol::EncodeFileRequest({{}, {}, {{3, 1}, {2, 1}}}));
+}

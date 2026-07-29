@@ -17,7 +17,8 @@ request_id:u64 | payload_length:u32 | payload[payload_length]
 frame is 16 MiB, including its 16-byte envelope. A decoder must reject bad magic,
 unknown type, oversized payloads, and trailing/truncated bytes before dispatch.
 
-Control frames use `HELLO (1)`, `MANIFEST (2)`, `ERROR (3)`, `HEARTBEAT (4)`.
+Control frames use `HELLO (1)`, `MANIFEST (2)`, `ERROR (3)`, `HEARTBEAT (4)`,
+`FILE_REQUEST (5)`.
 Bulk frames use `CHUNK (64)`, `CHUNK_ACK (65)`, `WINDOW_UPDATE (66)`. A transport
 must not accept a control type on the bulk channel or vice versa.
 
@@ -54,6 +55,16 @@ The initial logical chunk target is 256 KiB. A future DataChannel adapter may sl
 an encoded chunk to meet its message limit, but must reconstruct this application
 frame before handing it to the engine. A receiver verifies that `chunk_length` equals
 the remaining payload size and that the chunk hash matches its bytes before writing.
+
+## FILE_REQUEST v1 payload
+
+```text
+transfer_id[16] | file_hash[32] | range_count:u32 |
+  first_chunk:u64 | chunk_count:u32  (repeated)
+```
+
+This requests missing logical chunk ranges after reconnect. Ranges are ordered,
+non-overlapping, and non-empty.
 
 ## Error codes
 
