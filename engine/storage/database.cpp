@@ -133,6 +133,10 @@ void Database::ApplyMigrations() {
 }
 void Database::CreateTask(const TaskDefinition& task) {
   if (task.task_id.empty() || task.root_path.empty()) throw std::invalid_argument("task id and root path are required");
+  if ((task.mode == "one_way" && task.role != "source" && task.role != "target") ||
+      (task.mode == "bidirectional" && task.role != "peer")) {
+    throw std::invalid_argument("task mode and role are incompatible");
+  }
   sqlite3_stmt* statement = nullptr;
   Check(sqlite3_prepare_v2(connection_, "INSERT INTO tasks(task_id, mode, role, root_path) VALUES(?, ?, ?, ?);", -1, &statement, nullptr), connection_, "prepare task insert");
   const auto cleanup = [&] { sqlite3_finalize(statement); };

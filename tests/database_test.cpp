@@ -16,6 +16,8 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     VSYNC_CHECK(task.has_value());
     VSYNC_CHECK(task->root_path == "C:/sync");
     VSYNC_CHECK(!database.FindTask("missing").has_value());
+    VSYNC_CHECK_THROWS(database.CreateTask({"invalid-one-way", "one_way", "peer", "C:/sync"}));
+    VSYNC_CHECK_THROWS(database.CreateTask({"invalid-two-way", "bidirectional", "source", "C:/sync"}));
     VSYNC_CHECK(database.CountRows("tasks") == 1);
     VSYNC_CHECK(database.CountRows("file_records") == 0);
   }
