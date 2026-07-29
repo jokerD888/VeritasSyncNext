@@ -36,3 +36,10 @@ VSYNC_TEST(ProtocolRoundTripsOrderedMissingChunkRanges) {
   VSYNC_CHECK(decoded.transfer_id == request.transfer_id); VSYNC_CHECK(decoded.file_hash == request.file_hash); VSYNC_CHECK(decoded.missing_ranges.size() == 2); VSYNC_CHECK(decoded.missing_ranges[1].first_chunk == 5);
   VSYNC_CHECK_THROWS(veritassync::protocol::EncodeFileRequest({{}, {}, {{3, 1}, {2, 1}}}));
 }
+
+VSYNC_TEST(ProtocolRoundTripsTransferCancellation) {
+  veritassync::protocol::Cancel cancel{}; cancel.transfer_id[0] = 9; cancel.reason = "source_changed";
+  const auto decoded = veritassync::protocol::DecodeCancel(veritassync::protocol::EncodeCancel(cancel));
+  VSYNC_CHECK(decoded.transfer_id == cancel.transfer_id); VSYNC_CHECK(decoded.reason == "source_changed");
+  VSYNC_CHECK_THROWS(veritassync::protocol::EncodeCancel({{}, ""}));
+}

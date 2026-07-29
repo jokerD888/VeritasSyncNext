@@ -19,6 +19,7 @@ unknown type, oversized payloads, and trailing/truncated bytes before dispatch.
 
 Control frames use `HELLO (1)`, `MANIFEST (2)`, `ERROR (3)`, `HEARTBEAT (4)`,
 `FILE_REQUEST (5)`.
+`CANCEL (6)` terminates a transfer with a stable reason code.
 Bulk frames use `CHUNK (64)`, `CHUNK_ACK (65)`, `WINDOW_UPDATE (66)`. A transport
 must not accept a control type on the bulk channel or vice versa.
 

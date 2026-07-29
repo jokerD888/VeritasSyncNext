@@ -16,7 +16,7 @@ inline constexpr std::size_t kLogicalChunkSize = 256U * 1024U;
 
 enum class Channel { kControl, kBulk };
 enum class FrameType : std::uint8_t {
-  kHello = 1, kManifest = 2, kError = 3, kHeartbeat = 4, kFileRequest = 5,
+  kHello = 1, kManifest = 2, kError = 3, kHeartbeat = 4, kFileRequest = 5, kCancel = 6,
   kChunk = 64, kChunkAck = 65, kWindowUpdate = 66,
 };
 enum class Role : std::uint8_t { kSource = 1, kTarget = 2, kPeer = 3 };
@@ -45,6 +45,7 @@ struct Chunk {
 };
 struct ChunkRange { std::uint64_t first_chunk; std::uint32_t chunk_count; bool operator==(const ChunkRange&) const = default; };
 struct FileRequest { std::array<std::uint8_t, 16> transfer_id; std::array<std::uint8_t, 32> file_hash; std::vector<ChunkRange> missing_ranges; };
+struct Cancel { std::array<std::uint8_t, 16> transfer_id; std::string reason; };
 
 [[nodiscard]] bool IsAllowedOn(Channel channel, FrameType type);
 [[nodiscard]] std::vector<std::uint8_t> EncodeFrame(const Frame& frame);
@@ -57,6 +58,8 @@ struct FileRequest { std::array<std::uint8_t, 16> transfer_id; std::array<std::u
 [[nodiscard]] Chunk DecodeChunk(std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> EncodeFileRequest(const FileRequest& request);
 [[nodiscard]] FileRequest DecodeFileRequest(std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> EncodeCancel(const Cancel& cancel);
+[[nodiscard]] Cancel DecodeCancel(std::span<const std::uint8_t> payload);
 [[nodiscard]] std::array<std::uint8_t, 32> TestHash(std::span<const std::uint8_t> bytes);
 [[nodiscard]] std::string ErrorCodeFor(std::string_view reason);
 
