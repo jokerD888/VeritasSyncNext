@@ -44,6 +44,7 @@ add_library(veritassync_engine
   engine/signaling/tracker_contract.cpp
   engine/sync/manifest_diff.cpp
   engine/sync/download_receiver.cpp
+  engine/sync/resume_request.cpp
   engine/sync/snapshot_reconciler.cpp
   engine/sync/phase0_node.cpp
 )
@@ -102,6 +103,7 @@ if(BUILD_TESTING)
     tests/manifest_scanner_test.cpp
     tests/manifest_diff_test.cpp
     tests/download_receiver_test.cpp
+    tests/resume_request_test.cpp
     tests/snapshot_reconciler_test.cpp
     tests/safe_file_writer_test.cpp
     tests/mock_sync_test.cpp
