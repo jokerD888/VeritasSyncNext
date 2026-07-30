@@ -14,10 +14,13 @@ class MockEndpoint final : public Transport {
   explicit MockEndpoint(MockNetwork& network);
   void Send(protocol::Channel channel, std::vector<std::uint8_t> wire) override;
   [[nodiscard]] std::size_t BufferedAmount(protocol::Channel channel) const override;
+  void SetBufferedAmount(protocol::Channel channel, std::size_t amount);
   void SetReceiveCallback(ReceiveCallback callback) override;
  private:
   MockNetwork& network_;
   ReceiveCallback callback_;
+  std::size_t control_buffered_amount_ = 0;
+  std::size_t bulk_buffered_amount_ = 0;
   friend class MockNetwork;
 };
 

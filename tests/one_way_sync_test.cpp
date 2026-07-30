@@ -220,3 +220,28 @@ VSYNC_TEST(OneWaySyncStreamsManyLogicalChunksWithoutRestart) {
   VSYNC_CHECK(target.Statistics().chunks_received == 33);
   VSYNC_CHECK(common::Blake3File(directories.Target() / "large.bin") == common::Blake3(bytes));
 }
+
+VSYNC_TEST(OneWaySyncWaitsForTransportBackpressureToClear) {
+  using namespace veritassync;
+  TemporarySyncDirectories directories;
+  const std::vector<std::uint8_t> bytes{'b', 'a', 'c', 'k', 'p', 'r', 'e', 's', 's', 'u', 'r', 'e'};
+  WriteBytes(directories.Source() / "file.bin", bytes);
+  storage::Database source_db(directories.SourceDb());
+  storage::Database target_db(directories.TargetDb());
+  source_db.ApplyMigrations(); target_db.ApplyMigrations();
+  source_db.CreateTask({"task-1", "one_way", "source", directories.Source().string()});
+  target_db.CreateTask({"task-1", "one_way", "target", directories.Target().string()});
+  transport::MockNetwork network;
+  auto endpoints = network.CreatePair();
+  sync::OneWaySyncNode source(Config(protocol::Role::kSource, directories.Source(), source_db), *endpoints.first);
+  sync::OneWaySyncNode target(Config(protocol::Role::kTarget, directories.Target(), target_db), *endpoints.second);
+  source.Start(); target.Start(); network.PumpUntilIdle();
+  endpoints.first->SetBufferedAmount(protocol::Channel::kBulk, 1024U * 1024U);
+  source.Pump();
+  VSYNC_CHECK(!network.PumpOne());
+  VSYNC_CHECK(source.Statistics().backpressure_pauses == 1);
+  endpoints.first->SetBufferedAmount(protocol::Channel::kBulk, 0);
+  source.Pump(); network.PumpUntilIdle();
+  VSYNC_CHECK(target.TargetIsConverged());
+  VSYNC_CHECK(ReadBytes(directories.Target() / "file.bin") == bytes);
+}
