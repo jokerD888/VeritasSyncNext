@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -49,8 +50,8 @@ class OneWaySyncNode {
   [[nodiscard]] bool HandshakeComplete() const;
   [[nodiscard]] bool TargetIsConverged() const;
   [[nodiscard]] std::size_t PendingDownloadCount() const;
-  [[nodiscard]] const TransferStatistics& Statistics() const;
-  [[nodiscard]] const std::optional<std::string>& LastError() const;
+  [[nodiscard]] TransferStatistics Statistics() const;
+  [[nodiscard]] std::optional<std::string> LastError() const;
 
  private:
   struct SourceFile;
@@ -85,6 +86,7 @@ class OneWaySyncNode {
   std::optional<protocol::Manifest> received_manifest_;
   std::optional<std::string> last_error_;
   TransferStatistics statistics_;
+  mutable std::recursive_mutex mutex_;
 };
 
 }  // namespace veritassync::sync

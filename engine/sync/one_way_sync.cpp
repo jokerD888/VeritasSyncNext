@@ -89,7 +89,7 @@ struct OneWaySyncNode::PendingUpload {
   std::unique_ptr<UploadSession> session;
 };
 
-OneWaySyncNode::~OneWaySyncNode() = default;
+OneWaySyncNode::~OneWaySyncNode() { transport_.SetReceiveCallback({}); }
 
 OneWaySyncNode::OneWaySyncNode(OneWaySyncConfig config, transport::Transport& transport)
     : config_(std::move(config)), transport_(transport), writer_(config_.task_root) {
@@ -107,6 +107,7 @@ OneWaySyncNode::OneWaySyncNode(OneWaySyncConfig config, transport::Transport& tr
 }
 
 void OneWaySyncNode::Start() {
+  std::scoped_lock lock(mutex_);
   if (started_) return;
   started_ = true;
   if (config_.role == protocol::Role::kSource) RefreshSource();
@@ -116,6 +117,7 @@ void OneWaySyncNode::Start() {
 }
 
 void OneWaySyncNode::RefreshSource() {
+  std::scoped_lock lock(mutex_);
   if (config_.role != protocol::Role::kSource) {
     throw std::logic_error("only source nodes may scan local changes");
   }
@@ -143,6 +145,7 @@ void OneWaySyncNode::RefreshSource() {
 }
 
 void OneWaySyncNode::Pump() {
+  std::scoped_lock lock(mutex_);
   if (config_.role != protocol::Role::kSource) return;
   for (auto it = uploads_.begin(); it != uploads_.end();) {
     const auto next = it->session->NextForTransport(transport_.BufferedAmount(protocol::Channel::kBulk));
@@ -161,19 +164,30 @@ void OneWaySyncNode::Pump() {
 }
 
 bool OneWaySyncNode::HandshakeComplete() const {
+  std::scoped_lock lock(mutex_);
   return started_ && received_hello_ && !last_error_.has_value();
 }
 
 bool OneWaySyncNode::TargetIsConverged() const {
+  std::scoped_lock lock(mutex_);
   return config_.role == protocol::Role::kTarget && HandshakeComplete() &&
          received_manifest_.has_value() && downloads_.empty();
 }
 
-std::size_t OneWaySyncNode::PendingDownloadCount() const { return downloads_.size(); }
+std::size_t OneWaySyncNode::PendingDownloadCount() const {
+  std::scoped_lock lock(mutex_);
+  return downloads_.size();
+}
 
-const TransferStatistics& OneWaySyncNode::Statistics() const { return statistics_; }
+TransferStatistics OneWaySyncNode::Statistics() const {
+  std::scoped_lock lock(mutex_);
+  return statistics_;
+}
 
-const std::optional<std::string>& OneWaySyncNode::LastError() const { return last_error_; }
+std::optional<std::string> OneWaySyncNode::LastError() const {
+  std::scoped_lock lock(mutex_);
+  return last_error_;
+}
 
 bool OneWaySyncNode::RolesCompatible(const protocol::Role peer_role) const {
   return (config_.role == protocol::Role::kSource && peer_role == protocol::Role::kTarget) ||
@@ -194,6 +208,7 @@ void OneWaySyncNode::SendManifest() {
 }
 
 void OneWaySyncNode::Receive(const protocol::Channel channel, std::vector<std::uint8_t> wire) {
+  std::scoped_lock lock(mutex_);
   try {
     if (channel == protocol::Channel::kControl) statistics_.control_bytes_received += wire.size();
     else statistics_.bulk_bytes_received += wire.size();
