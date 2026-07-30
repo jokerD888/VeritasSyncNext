@@ -5,6 +5,7 @@
 #include "engine/storage/ignore_rules.h"
 #include "engine/storage/manifest_scanner.h"
 #include "engine/sync/download_receiver.h"
+#include "engine/sync/snapshot_reconciler.h"
 #include "engine/sync/upload_session.h"
 
 #include <algorithm>
@@ -117,9 +118,13 @@ void OneWaySyncNode::RefreshSource() {
   storage::IgnoreRules rules;
   rules.LoadFile(config_.task_root);
   storage::ManifestScanner scanner(std::move(rules));
+  const auto snapshot = scanner.Scan(config_.task_root);
+  [[maybe_unused]] const auto reconciled = SnapshotReconciler(common::NewUuidV4).Apply(
+      config_.database, snapshot,
+      {config_.task_id, config_.device_id, manifest_revision_ + 1U, NowMilliseconds()});
   source_manifest_ = {++manifest_revision_, {}};
   source_files_.clear();
-  for (const auto& entry : scanner.Scan(config_.task_root)) {
+  for (const auto& entry : snapshot) {
     if (entry.kind != storage::SnapshotKind::kFile || !entry.content_hash.has_value()) continue;
     source_manifest_.entries.push_back(
         {entry.relative_path, entry.size, EncodeHash(*entry.content_hash)});

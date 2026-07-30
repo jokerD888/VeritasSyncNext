@@ -107,6 +107,8 @@ VSYNC_TEST(OneWaySyncResumesValidatedDownloadThenAppliesSourceTombstone) {
   VSYNC_CHECK(!std::filesystem::exists(directories.Target() / "nested/file.bin"));
   const auto tombstone = target_db.FindFileRecord("task-1", "nested/file.bin");
   VSYNC_CHECK(tombstone.has_value() && tombstone->kind == storage::FileKind::kTombstone);
+  const auto source_tombstone = source_db.FindFileRecord("task-1", "nested/file.bin");
+  VSYNC_CHECK(source_tombstone.has_value() && source_tombstone->kind == storage::FileKind::kTombstone);
 }
 
 VSYNC_TEST(OneWaySyncCancelsStaleSourceThenRetriesFreshManifest) {
