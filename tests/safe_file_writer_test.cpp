@@ -84,3 +84,14 @@ VSYNC_TEST(SafeFileWriterRejectsOverflowingChunkRange) {
   const std::vector<std::uint8_t> bytes{1, 2};
   VSYNC_CHECK_THROWS(writer.WritePartialChunk("file.bin", (std::numeric_limits<std::uint64_t>::max)() - 1, bytes));
 }
+
+VSYNC_TEST(SafeFileWriterRemovesOnlyRegularSynchronizedFiles) {
+  TemporaryDirectory directory;
+  veritassync::storage::SafeFileWriter writer(directory.Path());
+  const std::vector<std::uint8_t> bytes{1, 2, 3};
+  writer.WriteAtomically("nested/file.bin", bytes);
+  writer.RemoveFile("nested/file.bin");
+  VSYNC_CHECK(!std::filesystem::exists(directory.Path() / "nested/file.bin"));
+  writer.RemoveFile("nested/file.bin");
+  VSYNC_CHECK_THROWS(writer.RemoveFile("nested"));
+}

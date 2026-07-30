@@ -200,4 +200,19 @@ void SafeFileWriter::CommitPartial(const std::string_view relative_path, const s
   CommitPart(part, destination);
 }
 
+void SafeFileWriter::RemoveFile(const std::string_view relative_path) const {
+  const auto destination = ResolveTaskPath(task_root_, relative_path);
+  RejectSymlink(destination, "destination file must not be a symlink");
+  std::error_code error;
+  const auto status = std::filesystem::status(destination, error);
+  if (error == std::errc::no_such_file_or_directory) return;
+  if (error) throw std::runtime_error("cannot inspect destination file for deletion");
+  if (!std::filesystem::is_regular_file(status)) {
+    throw std::invalid_argument("destination deletion requires a regular file");
+  }
+  if (!std::filesystem::remove(destination, error) || error) {
+    throw std::runtime_error("cannot delete synchronized file");
+  }
+}
+
 }  // namespace veritassync::storage

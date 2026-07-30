@@ -52,6 +52,7 @@ add_library(veritassync_engine
   engine/sync/resume_request.cpp
   engine/sync/snapshot_reconciler.cpp
   engine/sync/phase0_node.cpp
+  engine/sync/one_way_sync.cpp
 )
 target_include_directories(veritassync_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(veritassync_engine PUBLIC unofficial::sqlite3::sqlite3)
@@ -115,6 +116,7 @@ if(BUILD_TESTING)
     tests/snapshot_reconciler_test.cpp
     tests/safe_file_writer_test.cpp
     tests/mock_sync_test.cpp
+    tests/one_way_sync_test.cpp
     tests/connection_state_test.cpp
     tests/send_scheduler_test.cpp
     tests/tracker_contract_test.cpp

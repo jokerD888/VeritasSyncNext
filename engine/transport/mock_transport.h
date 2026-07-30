@@ -25,6 +25,7 @@ class MockNetwork {
  public:
   struct Pair { std::unique_ptr<MockEndpoint> first; std::unique_ptr<MockEndpoint> second; };
   [[nodiscard]] Pair CreatePair();
+  [[nodiscard]] bool PumpOne();
   void PumpUntilIdle();
  private:
   struct Pending { MockEndpoint* recipient; protocol::Channel channel; std::vector<std::uint8_t> wire; };
