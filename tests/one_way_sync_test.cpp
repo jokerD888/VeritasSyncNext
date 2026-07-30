@@ -153,3 +153,30 @@ VSYNC_TEST(OneWaySyncCancelsStaleSourceThenRetriesFreshManifest) {
   VSYNC_CHECK(target.TargetIsConverged());
   VSYNC_CHECK(ReadBytes(directories.Target() / "file.bin") == replacement);
 }
+
+VSYNC_TEST(OneWaySyncAppliesMultipleFilesIncludingEmptyFile) {
+  using namespace veritassync;
+  TemporarySyncDirectories directories;
+  const std::vector<std::uint8_t> text{'h', 'e', 'l', 'l', 'o'};
+  const std::vector<std::uint8_t> empty;
+  WriteBytes(directories.Source() / "notes.txt", text);
+  WriteBytes(directories.Source() / "nested/empty.bin", empty);
+  storage::Database source_db(directories.SourceDb());
+  storage::Database target_db(directories.TargetDb());
+  source_db.ApplyMigrations(); target_db.ApplyMigrations();
+  source_db.CreateTask({"task-1", "one_way", "source", directories.Source().string()});
+  target_db.CreateTask({"task-1", "one_way", "target", directories.Target().string()});
+  transport::MockNetwork network;
+  auto endpoints = network.CreatePair();
+  sync::OneWaySyncNode source(Config(protocol::Role::kSource, directories.Source(), source_db), *endpoints.first);
+  sync::OneWaySyncNode target(Config(protocol::Role::kTarget, directories.Target(), target_db), *endpoints.second);
+  source.Start(); target.Start(); network.PumpUntilIdle();
+  for (int attempt = 0; attempt < 8 && !target.TargetIsConverged(); ++attempt) {
+    source.Pump();
+    network.PumpUntilIdle();
+  }
+  VSYNC_CHECK(target.TargetIsConverged());
+  VSYNC_CHECK(ReadBytes(directories.Target() / "notes.txt") == text);
+  VSYNC_CHECK(std::filesystem::is_regular_file(directories.Target() / "nested/empty.bin"));
+  VSYNC_CHECK(std::filesystem::file_size(directories.Target() / "nested/empty.bin") == 0);
+}
