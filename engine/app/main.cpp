@@ -4,6 +4,8 @@
 #include "engine/common/uuid.h"
 #include "engine/sync/snapshot_reconciler.h"
 #include "engine/sync/task_policy.h"
+#include "engine/sync/one_way_sync.h"
+#include "engine/transport/mock_transport.h"
 
 #include <chrono>
 #include <filesystem>
@@ -13,7 +15,8 @@
 
 namespace {
 void Usage() {
-  std::cout << "Usage: veritassync-engine --headless --db <path> [--init-task <id> --mode <one_way|bidirectional> --role <source|target|peer> --root <path>] [--scan-task <id> --device-id <id>]\n";
+  std::cout << "Usage: veritassync-engine --headless --db <path> [--init-task <id> --mode <one_way|bidirectional> --role <source|target|peer> --root <path>] [--scan-task <id> --device-id <id>]\n"
+               "       veritassync-engine --headless --mock-one-way --mock-source-root <path> --mock-target-root <path> --mock-source-db <path> --mock-target-db <path> [--mock-task-id <id>]\n";
 }
 
 void RequireDatabaseOutsideTaskRoot(const std::filesystem::path& database_path,
@@ -30,16 +33,77 @@ void RequireDatabaseOutsideTaskRoot(const std::filesystem::path& database_path,
   }
   if (inside) throw std::invalid_argument("database path must be outside the task root");
 }
+
+void EnsureTask(veritassync::storage::Database& database,
+                const veritassync::storage::TaskDefinition& expected) {
+  const auto existing = database.FindTask(expected.task_id);
+  if (!existing.has_value()) {
+    database.CreateTask(expected);
+    return;
+  }
+  if (existing->mode != expected.mode || existing->role != expected.role ||
+      std::filesystem::path(existing->root_path) != std::filesystem::path(expected.root_path)) {
+    throw std::invalid_argument("existing mock task does not match requested role or root");
+  }
+}
+
+void RunMockOneWay(const std::string& task_id, const std::filesystem::path& source_root,
+                   const std::filesystem::path& target_root,
+                   const std::filesystem::path& source_database_path,
+                   const std::filesystem::path& target_database_path) {
+  if (task_id.empty()) throw std::invalid_argument("mock task id is required");
+  if (!std::filesystem::is_directory(source_root)) throw std::invalid_argument("mock source root must exist");
+  std::filesystem::create_directories(target_root);
+  RequireDatabaseOutsideTaskRoot(source_database_path, source_root);
+  RequireDatabaseOutsideTaskRoot(target_database_path, target_root);
+  veritassync::storage::Database source_database(source_database_path);
+  veritassync::storage::Database target_database(target_database_path);
+  source_database.ApplyMigrations();
+  target_database.ApplyMigrations();
+  EnsureTask(source_database, {task_id, "one_way", "source", source_root.string()});
+  EnsureTask(target_database, {task_id, "one_way", "target", target_root.string()});
+  veritassync::transport::MockNetwork network;
+  auto endpoints = network.CreatePair();
+  veritassync::sync::OneWaySyncNode source(
+      {task_id, veritassync::protocol::Role::kSource, "mock-source", "mock-target",
+       "mock-source-fingerprint", "mock-shared-auth", source_root, source_database},
+      *endpoints.first);
+  veritassync::sync::OneWaySyncNode target(
+      {task_id, veritassync::protocol::Role::kTarget, "mock-target", "mock-source",
+       "mock-target-fingerprint", "mock-shared-auth", target_root, target_database},
+      *endpoints.second);
+  source.Start();
+  target.Start();
+  network.PumpUntilIdle();
+  constexpr std::size_t kMaximumPumpIterations = 2U * 1024U * 1024U;
+  for (std::size_t iteration = 0; iteration < kMaximumPumpIterations && !target.TargetIsConverged(); ++iteration) {
+    source.Pump();
+    network.PumpUntilIdle();
+  }
+  if (!target.TargetIsConverged()) {
+    throw std::runtime_error("mock one-way sync did not converge" +
+                             (target.LastError().has_value() ? ": " + *target.LastError() : ""));
+  }
+  const auto source_statistics = source.Statistics();
+  const auto target_statistics = target.Statistics();
+  std::cout << "Mock one-way sync converged: source chunks=" << source_statistics.chunks_sent
+            << ", target chunks=" << target_statistics.chunks_received
+            << ", committed files=" << target_statistics.files_committed
+            << ", deleted files=" << target_statistics.files_deleted << "\n";
+}
 }
 int main(int argc, char** argv) {
   try {
     bool headless = false;
     std::string db_path;
     std::string init_task_id, scan_task_id, device_id, mode, role, root;
+    bool mock_one_way = false;
+    std::string mock_source_root, mock_target_root, mock_source_db, mock_target_db, mock_task_id = "phase2-mock";
     for (int i = 1; i < argc; ++i) {
       const std::string argument = argv[i];
       if (argument == "--help") { Usage(); return 0; }
       if (argument == "--headless") { headless = true; continue; }
+      if (argument == "--mock-one-way") { mock_one_way = true; continue; }
       if (i + 1 >= argc) throw std::invalid_argument("missing value for " + argument);
       const std::string value = argv[++i];
       if (argument == "--db") db_path = value;
@@ -49,9 +113,22 @@ int main(int argc, char** argv) {
       else if (argument == "--mode") mode = value;
       else if (argument == "--role") role = value;
       else if (argument == "--root") root = value;
+      else if (argument == "--mock-source-root") mock_source_root = value;
+      else if (argument == "--mock-target-root") mock_target_root = value;
+      else if (argument == "--mock-source-db") mock_source_db = value;
+      else if (argument == "--mock-target-db") mock_target_db = value;
+      else if (argument == "--mock-task-id") mock_task_id = value;
       else throw std::invalid_argument("unknown option: " + argument);
     }
-    if (!headless || db_path.empty()) { Usage(); return 2; }
+    if (!headless) { Usage(); return 2; }
+    if (mock_one_way) {
+      if (mock_source_root.empty() || mock_target_root.empty() || mock_source_db.empty() || mock_target_db.empty()) {
+        throw std::invalid_argument("--mock-one-way requires source/target roots and database paths");
+      }
+      RunMockOneWay(mock_task_id, mock_source_root, mock_target_root, mock_source_db, mock_target_db);
+      return 0;
+    }
+    if (db_path.empty()) { Usage(); return 2; }
     veritassync::storage::Database database(db_path);
     database.ApplyMigrations();
     if (!init_task_id.empty()) {
