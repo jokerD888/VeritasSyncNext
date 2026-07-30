@@ -17,14 +17,17 @@ protocol::Chunk ChunkSource::ReadChunk(const std::uint64_t chunk_index) const {
   const auto size = std::filesystem::file_size(source_path_);
   const auto total_chunks = (size + protocol::kLogicalChunkSize - 1U) / protocol::kLogicalChunkSize;
   if (chunk_index >= total_chunks) throw std::invalid_argument("requested chunk is outside source");
-  std::ifstream stream(source_path_, std::ios::binary);
-  if (!stream) throw std::runtime_error("cannot read transfer source");
+  if (!stream_.is_open()) {
+    stream_.open(source_path_, std::ios::binary);
+  }
+  if (!stream_) throw std::runtime_error("cannot read transfer source");
   const auto offset = chunk_index * protocol::kLogicalChunkSize;
   const auto length = static_cast<std::size_t>((std::min)(protocol::kLogicalChunkSize, size - offset));
-  stream.seekg(static_cast<std::streamoff>(offset));
+  stream_.clear();
+  stream_.seekg(static_cast<std::streamoff>(offset));
   std::vector<std::uint8_t> bytes(length);
-  stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-  if (stream.gcount() != static_cast<std::streamsize>(bytes.size())) throw std::runtime_error("cannot read transfer chunk");
+  stream_.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  if (stream_.gcount() != static_cast<std::streamsize>(bytes.size())) throw std::runtime_error("cannot read transfer chunk");
   return {transfer_id_, file_hash_, offset, protocol::TestHash(bytes), std::move(bytes)};
 }
 }  // namespace veritassync::sync

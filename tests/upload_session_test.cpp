@@ -10,16 +10,18 @@ VSYNC_TEST(UploadSessionSchedulesOnlyRequestedBulkFrames) {
   std::vector<std::uint8_t> bytes(veritassync::protocol::kLogicalChunkSize + 1, 4);
   { std::ofstream stream(path, std::ios::binary); stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())); }
   std::array<std::uint8_t, 16> id{}; id[0] = 9; const auto hash = veritassync::common::Blake3(bytes);
-  veritassync::sync::UploadSession session({path, id, hash}, 1024U * 1024U, 32);
-  session.QueueRequested({id, hash, {{1, 1}}});
-  VSYNC_CHECK(session.HasPending());
-  VSYNC_CHECK(!session.NextForTransport(32).has_value());
-  const auto pending = session.NextForTransport(0);
-  VSYNC_CHECK(pending.has_value() && pending->channel == veritassync::protocol::Channel::kBulk);
-  const auto frame = veritassync::protocol::DecodeFrame(pending->wire);
-  VSYNC_CHECK(frame.type == veritassync::protocol::FrameType::kChunk);
-  VSYNC_CHECK(veritassync::protocol::DecodeChunk(frame.payload).offset == veritassync::protocol::kLogicalChunkSize);
-  VSYNC_CHECK(!session.HasPending());
+  {
+    veritassync::sync::UploadSession session({path, id, hash}, 1024U * 1024U, 32);
+    session.QueueRequested({id, hash, {{1, 1}}});
+    VSYNC_CHECK(session.HasPending());
+    VSYNC_CHECK(!session.NextForTransport(32).has_value());
+    const auto pending = session.NextForTransport(0);
+    VSYNC_CHECK(pending.has_value() && pending->channel == veritassync::protocol::Channel::kBulk);
+    const auto frame = veritassync::protocol::DecodeFrame(pending->wire);
+    VSYNC_CHECK(frame.type == veritassync::protocol::FrameType::kChunk);
+    VSYNC_CHECK(veritassync::protocol::DecodeChunk(frame.payload).offset == veritassync::protocol::kLogicalChunkSize);
+    VSYNC_CHECK(!session.HasPending());
+  }
   std::filesystem::remove(path);
 }
 
@@ -28,16 +30,18 @@ VSYNC_TEST(UploadSessionMaterializesOnlyOneRequestedChunkAtATime) {
   std::vector<std::uint8_t> bytes(veritassync::protocol::kLogicalChunkSize + 1, 8);
   { std::ofstream stream(path, std::ios::binary); stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())); }
   std::array<std::uint8_t, 16> id{}; id[0] = 3; const auto hash = veritassync::common::Blake3(bytes);
-  veritassync::sync::UploadSession session({path, id, hash}, 1024U * 1024U, 32);
-  session.QueueRequested({id, hash, {{0, 2}}});
-  const auto first = session.NextForTransport(0);
-  VSYNC_CHECK(first.has_value());
-  VSYNC_CHECK(veritassync::protocol::DecodeChunk(veritassync::protocol::DecodeFrame(first->wire).payload).offset == 0);
-  VSYNC_CHECK(session.PendingBytes() == 0);
-  VSYNC_CHECK(session.HasPending());
-  const auto second = session.NextForTransport(0);
-  VSYNC_CHECK(second.has_value());
-  VSYNC_CHECK(veritassync::protocol::DecodeChunk(veritassync::protocol::DecodeFrame(second->wire).payload).offset == veritassync::protocol::kLogicalChunkSize);
-  VSYNC_CHECK(!session.HasPending());
+  {
+    veritassync::sync::UploadSession session({path, id, hash}, 1024U * 1024U, 32);
+    session.QueueRequested({id, hash, {{0, 2}}});
+    const auto first = session.NextForTransport(0);
+    VSYNC_CHECK(first.has_value());
+    VSYNC_CHECK(veritassync::protocol::DecodeChunk(veritassync::protocol::DecodeFrame(first->wire).payload).offset == 0);
+    VSYNC_CHECK(session.PendingBytes() == 0);
+    VSYNC_CHECK(session.HasPending());
+    const auto second = session.NextForTransport(0);
+    VSYNC_CHECK(second.has_value());
+    VSYNC_CHECK(veritassync::protocol::DecodeChunk(veritassync::protocol::DecodeFrame(second->wire).payload).offset == veritassync::protocol::kLogicalChunkSize);
+    VSYNC_CHECK(!session.HasPending());
+  }
   std::filesystem::remove(path);
 }

@@ -194,3 +194,29 @@ VSYNC_TEST(OneWaySyncAppliesMultipleFilesIncludingEmptyFile) {
   const auto directory_tombstone = target_db.FindFileRecord("task-1", "empty-directory");
   VSYNC_CHECK(directory_tombstone.has_value() && directory_tombstone->kind == storage::FileKind::kTombstone);
 }
+
+VSYNC_TEST(OneWaySyncStreamsManyLogicalChunksWithoutRestart) {
+  using namespace veritassync;
+  TemporarySyncDirectories directories;
+  std::vector<std::uint8_t> bytes(protocol::kLogicalChunkSize * 32U + 31U, 0x5a);
+  bytes.back() = 0x33;
+  WriteBytes(directories.Source() / "large.bin", bytes);
+  storage::Database source_db(directories.SourceDb());
+  storage::Database target_db(directories.TargetDb());
+  source_db.ApplyMigrations(); target_db.ApplyMigrations();
+  source_db.CreateTask({"task-1", "one_way", "source", directories.Source().string()});
+  target_db.CreateTask({"task-1", "one_way", "target", directories.Target().string()});
+  transport::MockNetwork network;
+  auto endpoints = network.CreatePair();
+  sync::OneWaySyncNode source(Config(protocol::Role::kSource, directories.Source(), source_db), *endpoints.first);
+  sync::OneWaySyncNode target(Config(protocol::Role::kTarget, directories.Target(), target_db), *endpoints.second);
+  source.Start(); target.Start(); network.PumpUntilIdle();
+  for (std::size_t attempt = 0; attempt < 40 && !target.TargetIsConverged(); ++attempt) {
+    source.Pump();
+    network.PumpUntilIdle();
+  }
+  VSYNC_CHECK(target.TargetIsConverged());
+  VSYNC_CHECK(source.Statistics().chunks_sent == 33);
+  VSYNC_CHECK(target.Statistics().chunks_received == 33);
+  VSYNC_CHECK(common::Blake3File(directories.Target() / "large.bin") == common::Blake3(bytes));
+}
