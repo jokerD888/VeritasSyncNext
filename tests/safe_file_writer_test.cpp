@@ -117,3 +117,15 @@ VSYNC_TEST(SafeFileWriterDiscardsUncommittedPartialFile) {
   writer.DiscardPartial("file.bin");
   VSYNC_CHECK(!std::filesystem::exists(directory.Path() / "file.bin.part"));
 }
+
+VSYNC_TEST(SafeFileWriterNeverReplacesDestinationAfterHashFailure) {
+  TemporaryDirectory directory;
+  veritassync::storage::SafeFileWriter writer(directory.Path());
+  const std::vector<std::uint8_t> existing{'o', 'l', 'd'};
+  const std::vector<std::uint8_t> partial{'n', 'e', 'w'};
+  writer.WriteAtomically("file.bin", existing);
+  writer.WritePartialChunk("file.bin", 0, partial);
+  VSYNC_CHECK_THROWS(writer.CommitPartial("file.bin", partial.size(), veritassync::common::Blake3(existing)));
+  VSYNC_CHECK(ReadBytes(directory.Path() / "file.bin") == existing);
+  VSYNC_CHECK(std::filesystem::exists(directory.Path() / "file.bin.part"));
+}
