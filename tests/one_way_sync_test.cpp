@@ -161,6 +161,7 @@ VSYNC_TEST(OneWaySyncAppliesMultipleFilesIncludingEmptyFile) {
   const std::vector<std::uint8_t> empty;
   WriteBytes(directories.Source() / "notes.txt", text);
   WriteBytes(directories.Source() / "nested/empty.bin", empty);
+  std::filesystem::create_directories(directories.Source() / "empty-directory");
   storage::Database source_db(directories.SourceDb());
   storage::Database target_db(directories.TargetDb());
   source_db.ApplyMigrations(); target_db.ApplyMigrations();
@@ -179,9 +180,17 @@ VSYNC_TEST(OneWaySyncAppliesMultipleFilesIncludingEmptyFile) {
   VSYNC_CHECK(ReadBytes(directories.Target() / "notes.txt") == text);
   VSYNC_CHECK(std::filesystem::is_regular_file(directories.Target() / "nested/empty.bin"));
   VSYNC_CHECK(std::filesystem::file_size(directories.Target() / "nested/empty.bin") == 0);
+  VSYNC_CHECK(std::filesystem::is_directory(directories.Target() / "empty-directory"));
   VSYNC_CHECK(source.Statistics().chunks_sent == 1);
   VSYNC_CHECK(source.Statistics().bulk_bytes_sent > 0);
   VSYNC_CHECK(target.Statistics().chunks_received == 1);
   VSYNC_CHECK(target.Statistics().files_committed == 2);
   VSYNC_CHECK(target.Statistics().control_bytes_received > 0);
+
+  std::filesystem::remove(directories.Source() / "empty-directory");
+  source.RefreshSource();
+  network.PumpUntilIdle();
+  VSYNC_CHECK(!std::filesystem::exists(directories.Target() / "empty-directory"));
+  const auto directory_tombstone = target_db.FindFileRecord("task-1", "empty-directory");
+  VSYNC_CHECK(directory_tombstone.has_value() && directory_tombstone->kind == storage::FileKind::kTombstone);
 }
