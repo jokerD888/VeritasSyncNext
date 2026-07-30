@@ -154,7 +154,7 @@ void SafeFileWriter::WriteAtomically(const std::string_view relative_path,
 }
 
 void SafeFileWriter::WritePartialChunk(const std::string_view relative_path, const std::uint64_t offset,
-                                       const std::span<const std::uint8_t> bytes) const {
+                                       const std::span<const std::uint8_t> bytes, const bool flush) const {
   if (offset > static_cast<std::uint64_t>((std::numeric_limits<std::streamoff>::max)())) {
     throw std::invalid_argument("chunk offset is too large");
   }
@@ -177,7 +177,33 @@ void SafeFileWriter::WritePartialChunk(const std::string_view relative_path, con
   stream.flush();
   if (!stream) throw std::runtime_error("cannot write partial download");
   stream.close();
+  if (flush) FlushPartFile(part);
+}
+
+void SafeFileWriter::FlushPartial(const std::string_view relative_path) const {
+  const auto destination = ResolveTaskPath(task_root_, relative_path);
+  const auto part = ResumablePartPath(destination);
+  RejectSymlink(part, "partial file must not be a symlink");
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(part, error) || error) {
+    throw std::runtime_error("partial download does not exist for flush");
+  }
   FlushPartFile(part);
+}
+
+void SafeFileWriter::DiscardPartial(const std::string_view relative_path) const {
+  const auto destination = ResolveTaskPath(task_root_, relative_path);
+  const auto part = ResumablePartPath(destination);
+  RejectSymlink(part, "partial file must not be a symlink");
+  std::error_code error;
+  const auto status = std::filesystem::status(part, error);
+  if (error == std::errc::no_such_file_or_directory) return;
+  if (error || !std::filesystem::is_regular_file(status)) {
+    throw std::runtime_error("cannot discard unsafe partial download");
+  }
+  if (!std::filesystem::remove(part, error) || error) {
+    throw std::runtime_error("cannot discard partial download");
+  }
 }
 
 void SafeFileWriter::CommitPartial(const std::string_view relative_path, const std::uint64_t expected_size,

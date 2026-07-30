@@ -66,6 +66,8 @@ class OneWaySyncNode {
   void BeginDownload(const protocol::ManifestEntry& entry);
   void AcceptChunk(const protocol::Chunk& chunk);
   void CommitDownload(ActiveDownload& download);
+  void PersistDownloadChunks(ActiveDownload& download);
+  void PersistPendingDownloads(bool force);
   void HandleFileRequest(const protocol::FileRequest& request);
   void HandleCancel(const protocol::Cancel& cancel);
   void DeleteFilesAbsentFrom(const protocol::Manifest& manifest);

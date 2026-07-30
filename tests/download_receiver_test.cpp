@@ -39,3 +39,21 @@ VSYNC_TEST(DownloadReceiverPersistsCancellationAndStopsReceiving) {
     receiver.Cancel({id,"source_changed"},2); VSYNC_CHECK(db.TransferState(id)==std::optional<std::string>{"cancelled"}); VSYNC_CHECK_THROWS(receiver.ResumeRequest()); }
   std::filesystem::remove_all(root); std::filesystem::remove(db_path); std::filesystem::remove(db_path.string()+"-wal"); std::filesystem::remove(db_path.string()+"-shm");
 }
+
+VSYNC_TEST(DownloadReceiverPersistsOnlyFlushedChunkBatches) {
+  const auto root = std::filesystem::temp_directory_path() / ("veritassync-download-batch-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directory(root);
+  const auto db_path = root.parent_path() / (root.filename().string() + ".db");
+  { veritassync::storage::Database db(db_path); db.ApplyMigrations(); db.CreateTask({"task", "one_way", "target", root.string()});
+    veritassync::storage::TransferId id{}; id[0] = 3;
+    const std::vector<std::uint8_t> content{'a', 'b'}; const auto hash = veritassync::common::Blake3(content);
+    db.CreateTransfer({id, "task", "peer", "download", std::vector<std::uint8_t>(hash.begin(), hash.end()), "active", 1, 1, "file.bin"});
+    veritassync::storage::SafeFileWriter writer(root); veritassync::sync::DownloadReceiver receiver(db, id, writer, "file.bin", content.size(), hash, 1);
+    receiver.AcceptChunk(0, 0, content, veritassync::common::Blake3(content), 2, false);
+    VSYNC_CHECK(receiver.ResumeRequest().missing_ranges == std::vector<veritassync::protocol::ChunkRange>({{0, 1}}));
+    const std::vector<std::uint64_t> batch{0}; receiver.PersistAcceptedChunks(batch, 3);
+    VSYNC_CHECK(db.CompletedTransferChunks(id) == batch);
+    receiver.Commit(4);
+  }
+  std::filesystem::remove_all(root); std::filesystem::remove(db_path); std::filesystem::remove(db_path.string()+"-wal"); std::filesystem::remove(db_path.string()+"-shm");
+}

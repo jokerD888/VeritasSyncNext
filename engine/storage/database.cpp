@@ -350,7 +350,14 @@ ORDER BY created_at_ms DESC LIMIT 1;
 }
 void Database::MarkTransferChunkCompleted(const TransferId& transfer_id, const std::uint64_t chunk_index,
                                           const std::int64_t updated_at_ms) {
-  if (chunk_index > static_cast<std::uint64_t>((std::numeric_limits<sqlite3_int64>::max)()) || updated_at_ms <= 0) {
+  MarkTransferChunksCompleted(transfer_id, std::span<const std::uint64_t>(&chunk_index, 1), updated_at_ms);
+}
+void Database::MarkTransferChunksCompleted(const TransferId& transfer_id,
+                                           const std::span<const std::uint64_t> chunk_indices,
+                                           const std::int64_t updated_at_ms) {
+  if (chunk_indices.empty() || updated_at_ms <= 0 || std::ranges::any_of(chunk_indices, [](const std::uint64_t chunk_index) {
+        return chunk_index > static_cast<std::uint64_t>((std::numeric_limits<sqlite3_int64>::max)());
+      })) {
     throw std::invalid_argument("transfer chunk fields are invalid");
   }
   InTransaction([&] {
@@ -359,9 +366,13 @@ void Database::MarkTransferChunkCompleted(const TransferId& transfer_id, const s
     Check(sqlite3_prepare_v2(connection_, chunk_sql, -1, &chunk, nullptr), connection_, "prepare transfer chunk update");
     const auto cleanup_chunk = [&] { sqlite3_finalize(chunk); };
     try {
-      BindTransferId(chunk, 1, transfer_id, connection_, "bind chunk transfer id");
-      Check(sqlite3_bind_int64(chunk, 2, static_cast<sqlite3_int64>(chunk_index)), connection_, "bind chunk index");
-      Check(sqlite3_step(chunk), connection_, "mark transfer chunk complete");
+      for (const auto chunk_index : chunk_indices) {
+        BindTransferId(chunk, 1, transfer_id, connection_, "bind chunk transfer id");
+        Check(sqlite3_bind_int64(chunk, 2, static_cast<sqlite3_int64>(chunk_index)), connection_, "bind chunk index");
+        Check(sqlite3_step(chunk), connection_, "mark transfer chunk complete");
+        Check(sqlite3_reset(chunk), connection_, "reset transfer chunk update");
+        Check(sqlite3_clear_bindings(chunk), connection_, "clear transfer chunk update");
+      }
       cleanup_chunk();
     } catch (...) { cleanup_chunk(); throw; }
     constexpr const char* transfer_sql = "UPDATE transfers SET updated_at_ms=? WHERE transfer_id=?;";

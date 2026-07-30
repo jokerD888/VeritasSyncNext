@@ -18,7 +18,7 @@ DownloadReceiver::DownloadReceiver(storage::Database& database, const storage::T
 }
 void DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::uint64_t offset,
                                    const std::span<const std::uint8_t> bytes, const common::ContentHash& chunk_hash,
-                                   const std::int64_t updated_at_ms) {
+                                   const std::int64_t updated_at_ms, const bool persist) {
   if (cancelled_) throw std::logic_error("download is cancelled");
   const auto expected_offset = chunk_index * protocol::kLogicalChunkSize;
   const auto expected_length = expected_offset < expected_size_ ?
@@ -26,8 +26,14 @@ void DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::u
   if (chunk_index >= chunk_count_ || offset != expected_offset || bytes.size() != expected_length || common::Blake3(bytes) != chunk_hash) {
     throw std::invalid_argument("download chunk is invalid");
   }
-  writer_.WritePartialChunk(relative_path_, offset, bytes);
-  database_.MarkTransferChunkCompleted(transfer_id_, chunk_index, updated_at_ms);
+  writer_.WritePartialChunk(relative_path_, offset, bytes, persist);
+  if (persist) database_.MarkTransferChunkCompleted(transfer_id_, chunk_index, updated_at_ms);
+}
+void DownloadReceiver::PersistAcceptedChunks(const std::span<const std::uint64_t> chunk_indices,
+                                             const std::int64_t updated_at_ms) {
+  if (cancelled_) throw std::logic_error("download is cancelled");
+  writer_.FlushPartial(relative_path_);
+  database_.MarkTransferChunksCompleted(transfer_id_, chunk_indices, updated_at_ms);
 }
 protocol::FileRequest DownloadReceiver::ResumeRequest() const {
   if (cancelled_) throw std::logic_error("download is cancelled");

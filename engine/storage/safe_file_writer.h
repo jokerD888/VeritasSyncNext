@@ -23,7 +23,9 @@ class SafeFileWriter {
   void WriteAtomically(std::string_view relative_path,
                        std::span<const std::uint8_t> bytes) const;
   void WritePartialChunk(std::string_view relative_path, std::uint64_t offset,
-                         std::span<const std::uint8_t> bytes) const;
+                         std::span<const std::uint8_t> bytes, bool flush = true) const;
+  void FlushPartial(std::string_view relative_path) const;
+  void DiscardPartial(std::string_view relative_path) const;
   void CommitPartial(std::string_view relative_path, std::uint64_t expected_size,
                      const common::ContentHash& expected_hash) const;
   void RemoveFile(std::string_view relative_path) const;

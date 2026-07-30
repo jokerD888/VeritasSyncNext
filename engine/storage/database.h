@@ -70,6 +70,9 @@ class Database {
   void CreateTransfer(const TransferRecord& transfer);
   void MarkTransferChunkCompleted(const TransferId& transfer_id, std::uint64_t chunk_index,
                                   std::int64_t updated_at_ms);
+  void MarkTransferChunksCompleted(const TransferId& transfer_id,
+                                   std::span<const std::uint64_t> chunk_indices,
+                                   std::int64_t updated_at_ms);
   void UpdateTransferState(const TransferId& transfer_id, std::string state,
                            std::int64_t updated_at_ms, std::optional<std::string> error_code = std::nullopt);
   [[nodiscard]] std::optional<TransferRecord> FindActiveDownloadTransfer(

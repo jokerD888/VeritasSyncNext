@@ -65,8 +65,9 @@ VSYNC_TEST(DatabasePersistsCompletedTransferChunksForResume) {
     VSYNC_CHECK_THROWS(database.CreateTransfer({transfer_id, "task-1", "device-b", "download", {1}, "active", 100, 100}));
     database.MarkTransferChunkCompleted(transfer_id, 3, 101);
     database.MarkTransferChunkCompleted(transfer_id, 0, 102);
-    database.MarkTransferChunkCompleted(transfer_id, 3, 103);
-    VSYNC_CHECK(database.CompletedTransferChunks(transfer_id) == std::vector<std::uint64_t>({0, 3}));
+    const std::vector<std::uint64_t> batch{3, 5, 5};
+    database.MarkTransferChunksCompleted(transfer_id, batch, 103);
+    VSYNC_CHECK(database.CompletedTransferChunks(transfer_id) == std::vector<std::uint64_t>({0, 3, 5}));
     const auto active = database.FindActiveDownloadTransfer("task-1", "device-b", "nested/file.bin", std::vector<std::uint8_t>(32, 7));
     VSYNC_CHECK(active.has_value());
     VSYNC_CHECK(active->transfer_id == transfer_id);

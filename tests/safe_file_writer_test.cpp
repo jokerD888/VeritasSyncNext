@@ -108,3 +108,12 @@ VSYNC_TEST(SafeFileWriterCreatesAndRemovesOnlyEmptyDirectories) {
   writer.WriteAtomically("nested/nonempty/file.bin", bytes);
   VSYNC_CHECK_THROWS(writer.RemoveEmptyDirectory("nested/nonempty"));
 }
+
+VSYNC_TEST(SafeFileWriterDiscardsUncommittedPartialFile) {
+  TemporaryDirectory directory;
+  veritassync::storage::SafeFileWriter writer(directory.Path());
+  const std::vector<std::uint8_t> bytes{1, 2, 3};
+  writer.WritePartialChunk("file.bin", 0, bytes);
+  writer.DiscardPartial("file.bin");
+  VSYNC_CHECK(!std::filesystem::exists(directory.Path() / "file.bin.part"));
+}

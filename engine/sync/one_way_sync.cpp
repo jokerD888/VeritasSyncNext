@@ -22,6 +22,7 @@ namespace {
 
 constexpr std::size_t kMaxPendingUploadBytes = 16U * 1024U * 1024U;
 constexpr std::size_t kResumeBelowBytes = 1U * 1024U * 1024U;
+constexpr std::size_t kPersistBatchBytes = 8U * 1024U * 1024U;
 
 [[nodiscard]] std::int64_t NowMilliseconds() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -82,6 +83,9 @@ struct OneWaySyncNode::ActiveDownload {
   storage::TransferId transfer_id;
   std::uint64_t chunk_count;
   std::unique_ptr<DownloadReceiver> receiver;
+  std::size_t durable_chunks = 0;
+  std::size_t dirty_bytes = 0;
+  std::vector<std::uint64_t> dirty_chunks;
 };
 
 struct OneWaySyncNode::PendingUpload {
@@ -89,7 +93,10 @@ struct OneWaySyncNode::PendingUpload {
   std::unique_ptr<UploadSession> session;
 };
 
-OneWaySyncNode::~OneWaySyncNode() { transport_.SetReceiveCallback({}); }
+OneWaySyncNode::~OneWaySyncNode() {
+  try { PersistPendingDownloads(true); } catch (...) {}
+  transport_.SetReceiveCallback({});
+}
 
 OneWaySyncNode::OneWaySyncNode(OneWaySyncConfig config, transport::Transport& transport)
     : config_(std::move(config)), transport_(transport), writer_(config_.task_root) {
@@ -146,7 +153,10 @@ void OneWaySyncNode::RefreshSource() {
 
 void OneWaySyncNode::Pump() {
   std::scoped_lock lock(mutex_);
-  if (config_.role != protocol::Role::kSource) return;
+  if (config_.role == protocol::Role::kTarget) {
+    PersistPendingDownloads(false);
+    return;
+  }
   for (auto it = uploads_.begin(); it != uploads_.end();) {
     const auto next = it->session->NextForTransport(transport_.BufferedAmount(protocol::Channel::kBulk));
     if (next.has_value()) {
@@ -349,6 +359,7 @@ void OneWaySyncNode::BeginDownload(const protocol::ManifestEntry& entry) {
       std::span<const std::uint8_t>(hash));
   const auto transfer_id = active.has_value() ? active->transfer_id : common::NewTransferId();
   if (!active.has_value()) {
+    writer_.DiscardPartial(entry.relative_path);
     config_.database.CreateTransfer({transfer_id, config_.task_id, config_.peer_device_id, "download",
                                      {hash.begin(), hash.end()}, "active", NowMilliseconds(),
                                      NowMilliseconds(), entry.relative_path});
@@ -365,7 +376,8 @@ void OneWaySyncNode::BeginDownload(const protocol::ManifestEntry& entry) {
                                         config_.peer_device_id, 0, std::nullopt});
     return;
   }
-  downloads_.push_back({entry, hash, transfer_id, chunk_count, std::move(receiver)});
+  const auto durable_chunks = config_.database.CompletedTransferChunks(transfer_id).size();
+  downloads_.push_back({entry, hash, transfer_id, chunk_count, std::move(receiver), durable_chunks});
   Send(protocol::Channel::kControl, protocol::FrameType::kFileRequest,
        protocol::EncodeFileRequest(request));
 }
@@ -401,11 +413,33 @@ void OneWaySyncNode::AcceptChunk(const protocol::Chunk& chunk) {
   });
   if (download == downloads_.end()) throw std::invalid_argument("chunk does not belong to an active download");
   const auto index = chunk.offset / protocol::kLogicalChunkSize;
-  download->receiver->AcceptChunk(index, chunk.offset, chunk.bytes, chunk.chunk_hash, NowMilliseconds());
+  download->receiver->AcceptChunk(index, chunk.offset, chunk.bytes, chunk.chunk_hash, NowMilliseconds(), false);
   ++statistics_.chunks_received;
-  if (config_.database.CompletedTransferChunks(download->transfer_id).size() != download->chunk_count) return;
+  if (std::ranges::find(download->dirty_chunks, index) == download->dirty_chunks.end()) {
+    download->dirty_chunks.push_back(index);
+    download->dirty_bytes += chunk.bytes.size();
+  }
+  if (download->dirty_bytes >= kPersistBatchBytes ||
+      download->durable_chunks + download->dirty_chunks.size() == download->chunk_count) {
+    PersistDownloadChunks(*download);
+  }
+  if (download->durable_chunks != download->chunk_count) return;
   CommitDownload(*download);
   downloads_.erase(download);
+}
+
+void OneWaySyncNode::PersistDownloadChunks(ActiveDownload& download) {
+  if (download.dirty_chunks.empty()) return;
+  download.receiver->PersistAcceptedChunks(download.dirty_chunks, NowMilliseconds());
+  download.durable_chunks += download.dirty_chunks.size();
+  download.dirty_chunks.clear();
+  download.dirty_bytes = 0;
+}
+
+void OneWaySyncNode::PersistPendingDownloads(const bool force) {
+  for (auto& download : downloads_) {
+    if (force || download.dirty_bytes >= kPersistBatchBytes) PersistDownloadChunks(download);
+  }
 }
 
 void OneWaySyncNode::CommitDownload(ActiveDownload& download) {
