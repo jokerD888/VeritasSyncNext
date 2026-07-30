@@ -75,23 +75,27 @@ VSYNC_TEST(OneWaySyncResumesValidatedDownloadThenAppliesSourceTombstone) {
 
   transport::MockNetwork network;
   auto endpoints = network.CreatePair();
-  sync::OneWaySyncNode source(Config(protocol::Role::kSource, directories.Source(), source_db),
-                              *endpoints.first);
+  auto source = std::make_unique<sync::OneWaySyncNode>(
+      Config(protocol::Role::kSource, directories.Source(), source_db), *endpoints.first);
   auto target = std::make_unique<sync::OneWaySyncNode>(
       Config(protocol::Role::kTarget, directories.Target(), target_db), *endpoints.second);
-  source.Start();
+  source->Start();
   target->Start();
   network.PumpUntilIdle();
-  source.Pump();
+  source->Pump();
   VSYNC_CHECK(network.PumpOne());
   VSYNC_CHECK(target->PendingDownloadCount() == 1);
 
   target.reset();
+  source.reset();
+  source = std::make_unique<sync::OneWaySyncNode>(
+      Config(protocol::Role::kSource, directories.Source(), source_db), *endpoints.first);
   target = std::make_unique<sync::OneWaySyncNode>(
       Config(protocol::Role::kTarget, directories.Target(), target_db), *endpoints.second);
+  source->Start();
   target->Start();
   network.PumpUntilIdle();
-  source.Pump();
+  source->Pump();
   network.PumpUntilIdle();
 
   VSYNC_CHECK(target->TargetIsConverged());
@@ -102,7 +106,7 @@ VSYNC_TEST(OneWaySyncResumesValidatedDownloadThenAppliesSourceTombstone) {
   VSYNC_CHECK(target_db.CountRows("transfer_chunks") == 2);
 
   std::filesystem::remove(directories.Source() / "nested/file.bin");
-  source.RefreshSource();
+  source->RefreshSource();
   network.PumpUntilIdle();
   VSYNC_CHECK(!std::filesystem::exists(directories.Target() / "nested/file.bin"));
   const auto tombstone = target_db.FindFileRecord("task-1", "nested/file.bin");
