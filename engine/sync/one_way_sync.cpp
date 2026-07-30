@@ -191,7 +191,7 @@ void OneWaySyncNode::Receive(const protocol::Channel channel, std::vector<std::u
       }
       return;
     }
-    if (!HandshakeComplete()) throw std::invalid_argument("unauthorized_peer");
+    if (!started_ || !received_hello_) throw std::invalid_argument("unauthorized_peer");
     switch (frame.type) {
       case protocol::FrameType::kManifest:
         if (config_.role != protocol::Role::kTarget) throw std::invalid_argument("unexpected_manifest");
@@ -228,6 +228,7 @@ void OneWaySyncNode::ApplyManifest(const protocol::Manifest& manifest) {
   if (std::adjacent_find(paths.begin(), paths.end()) != paths.end()) {
     throw std::invalid_argument("manifest contains duplicate paths");
   }
+  last_error_.reset();
   received_manifest_ = manifest;
   DeleteFilesAbsentFrom(manifest);
   for (const auto& entry : manifest.entries) {
@@ -319,7 +320,13 @@ void OneWaySyncNode::HandleFileRequest(const protocol::FileRequest& request) {
   auto session = std::make_unique<UploadSession>(
       ChunkSource(source->absolute_path, request.transfer_id, request.file_hash),
       kMaxPendingUploadBytes, kResumeBelowBytes);
-  session->QueueRequested(request);
+  try {
+    session->QueueRequested(request);
+  } catch (const std::exception&) {
+    Send(protocol::Channel::kControl, protocol::FrameType::kCancel,
+         protocol::EncodeCancel({request.transfer_id, "source_changed"}));
+    return;
+  }
   uploads_.push_back({request.transfer_id, std::move(session)});
 }
 
@@ -351,6 +358,7 @@ void OneWaySyncNode::HandleCancel(const protocol::Cancel& cancel) {
     if (download == downloads_.end()) throw std::invalid_argument("cancel does not match an active download");
     download->receiver->Cancel(cancel, NowMilliseconds());
     downloads_.erase(download);
+    last_error_ = cancel.reason;
     return;
   }
   uploads_.erase(std::remove_if(uploads_.begin(), uploads_.end(), [&](const PendingUpload& upload) {

@@ -108,3 +108,46 @@ VSYNC_TEST(OneWaySyncResumesValidatedDownloadThenAppliesSourceTombstone) {
   const auto tombstone = target_db.FindFileRecord("task-1", "nested/file.bin");
   VSYNC_CHECK(tombstone.has_value() && tombstone->kind == storage::FileKind::kTombstone);
 }
+
+VSYNC_TEST(OneWaySyncCancelsStaleSourceThenRetriesFreshManifest) {
+  using namespace veritassync;
+  TemporarySyncDirectories directories;
+  const std::vector<std::uint8_t> initial{'o', 'l', 'd'};
+  const std::vector<std::uint8_t> replacement{'n', 'e', 'w', '!'};
+  WriteBytes(directories.Source() / "file.bin", initial);
+
+  storage::Database source_db(directories.SourceDb());
+  storage::Database target_db(directories.TargetDb());
+  source_db.ApplyMigrations();
+  target_db.ApplyMigrations();
+  source_db.CreateTask({"task-1", "one_way", "source", directories.Source().string()});
+  target_db.CreateTask({"task-1", "one_way", "target", directories.Target().string()});
+  transport::MockNetwork network;
+  auto endpoints = network.CreatePair();
+  sync::OneWaySyncNode source(Config(protocol::Role::kSource, directories.Source(), source_db),
+                              *endpoints.first);
+  sync::OneWaySyncNode target(Config(protocol::Role::kTarget, directories.Target(), target_db),
+                              *endpoints.second);
+  source.Start();
+  target.Start();
+
+  while (network.PumpOne()) {
+    if (target.PendingDownloadCount() == 1) break;
+  }
+  WriteBytes(directories.Source() / "file.bin", replacement);
+  network.PumpUntilIdle();
+  VSYNC_CHECK(target.LastError() == std::optional<std::string>{"source_changed"});
+  VSYNC_CHECK(!target.TargetIsConverged());
+
+  source.RefreshSource();
+  network.PumpUntilIdle();
+  source.Pump();
+  network.PumpUntilIdle();
+  if (target.LastError().has_value()) {
+    throw std::runtime_error("retry failed: " + *target.LastError());
+  }
+  VSYNC_CHECK(target.PendingDownloadCount() == 0);
+  VSYNC_CHECK(target.HandshakeComplete());
+  VSYNC_CHECK(target.TargetIsConverged());
+  VSYNC_CHECK(ReadBytes(directories.Target() / "file.bin") == replacement);
+}
