@@ -27,6 +27,7 @@ using CreateOfferFunction = std::uint32_t(__cdecl*)(void*);
 using ApplySdpFunction = std::uint32_t(__cdecl*)(void*, const char*, std::uint32_t);
 using ApplyIceFunction = std::uint32_t(__cdecl*)(void*, const char*, std::uint32_t, std::int32_t, const char*, std::uint32_t);
 using IsReadyFunction = std::uint32_t(__cdecl*)(void*);
+using BufferedAmountFunction = std::uint64_t(__cdecl*)(void*);
 template <typename Function> Function Lookup(const HMODULE module, const char* const name) {
   const auto address = GetProcAddress(module, name);
   if (address == nullptr) throw std::runtime_error(std::string("WebRTC bridge is missing ") + name);
@@ -59,6 +60,8 @@ WebRtcTransport::WebRtcTransport(const std::filesystem::path& bridge_path) {
     apply_answer_ = reinterpret_cast<void*>(Lookup<ApplySdpFunction>(module, "VeritasSyncWebRtcBridgeApplyRemoteAnswer"));
     apply_ice_ = reinterpret_cast<void*>(Lookup<ApplyIceFunction>(module, "VeritasSyncWebRtcBridgeApplyRemoteIceCandidate"));
     is_ready_ = reinterpret_cast<void*>(Lookup<IsReadyFunction>(module, "VeritasSyncWebRtcBridgeIsReady"));
+    control_buffered_amount_ = reinterpret_cast<void*>(Lookup<BufferedAmountFunction>(module, "VeritasSyncWebRtcBridgeControlBufferedAmount"));
+    bulk_buffered_amount_ = reinterpret_cast<void*>(Lookup<BufferedAmountFunction>(module, "VeritasSyncWebRtcBridgeBulkBufferedAmount"));
   } catch (...) {
     if (factory_ != nullptr && destroy_ != nullptr) reinterpret_cast<DestroyFunction>(destroy_)(factory_);
     FreeLibrary(static_cast<HMODULE>(module_));
@@ -73,6 +76,15 @@ void WebRtcTransport::Send(const protocol::Channel channel, std::vector<std::uin
   if (wire.empty() || wire.size() > (std::numeric_limits<std::uint32_t>::max)()) throw std::invalid_argument("invalid WebRTC frame");
   const auto send = reinterpret_cast<SendFunction>(channel == protocol::Channel::kControl ? send_control_ : send_bulk_);
   if (send(factory_, wire.data(), static_cast<std::uint32_t>(wire.size())) != 1U) throw std::runtime_error("WebRTC DataChannel rejected frame");
+}
+std::size_t WebRtcTransport::BufferedAmount(const protocol::Channel channel) const {
+  const auto function = reinterpret_cast<BufferedAmountFunction>(
+      channel == protocol::Channel::kControl ? control_buffered_amount_ : bulk_buffered_amount_);
+  const auto amount = function(factory_);
+  if (amount > (std::numeric_limits<std::size_t>::max)()) {
+    return (std::numeric_limits<std::size_t>::max)();
+  }
+  return static_cast<std::size_t>(amount);
 }
 void WebRtcTransport::SetReceiveCallback(ReceiveCallback callback) { std::scoped_lock lock(callback_mutex_); callback_ = std::move(callback); }
 void WebRtcTransport::SetOfferCallback(SdpCallback callback) { std::scoped_lock lock(callback_mutex_); offer_callback_ = std::move(callback); }

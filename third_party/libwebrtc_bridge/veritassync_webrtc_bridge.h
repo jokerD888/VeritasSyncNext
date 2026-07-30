@@ -52,6 +52,8 @@ VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeSendBulk(
 VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeControlChannelState(void* factory);
 VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeConnectionState(void* factory);
 VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeIsReady(void* factory);
+VSYNC_WEBRTC_BRIDGE_EXPORT uint64_t VeritasSyncWebRtcBridgeControlBufferedAmount(void* factory);
+VSYNC_WEBRTC_BRIDGE_EXPORT uint64_t VeritasSyncWebRtcBridgeBulkBufferedAmount(void* factory);
 
 #ifdef __cplusplus
 }

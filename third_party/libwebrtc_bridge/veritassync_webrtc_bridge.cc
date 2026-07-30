@@ -132,6 +132,12 @@ class FactoryHolder final {
            control_channel_ != nullptr && control_channel_->state() == webrtc::DataChannelInterface::kOpen &&
            bulk_channel_ != nullptr && bulk_channel_->state() == webrtc::DataChannelInterface::kOpen;
   }
+  [[nodiscard]] uint64_t ControlBufferedAmount() const {
+    return control_channel_ == nullptr ? 0U : control_channel_->buffered_amount();
+  }
+  [[nodiscard]] uint64_t BulkBufferedAmount() const {
+    return bulk_channel_ == nullptr ? 0U : bulk_channel_->buffered_amount();
+  }
 
   ~FactoryHolder() {
     if (control_channel_ != nullptr) control_channel_->UnregisterObserver();
@@ -438,4 +444,14 @@ extern "C" uint32_t VeritasSyncWebRtcBridgeConnectionState(void* factory) {
 extern "C" uint32_t VeritasSyncWebRtcBridgeIsReady(void* factory) {
   if (factory == nullptr) return 0;
   return static_cast<FactoryHolder*>(factory)->IsReady() ? 1U : 0U;
+}
+
+extern "C" uint64_t VeritasSyncWebRtcBridgeControlBufferedAmount(void* factory) {
+  if (factory == nullptr) return 0;
+  return static_cast<FactoryHolder*>(factory)->ControlBufferedAmount();
+}
+
+extern "C" uint64_t VeritasSyncWebRtcBridgeBulkBufferedAmount(void* factory) {
+  if (factory == nullptr) return 0;
+  return static_cast<FactoryHolder*>(factory)->BulkBufferedAmount();
 }

@@ -18,6 +18,7 @@ class WebRtcTransport final : public Transport {
   ~WebRtcTransport() override;
   WebRtcTransport(const WebRtcTransport&) = delete;
   void Send(protocol::Channel channel, std::vector<std::uint8_t> wire) override;
+  [[nodiscard]] std::size_t BufferedAmount(protocol::Channel channel) const override;
   void SetReceiveCallback(ReceiveCallback callback) override;
   void SetOfferCallback(SdpCallback callback);
   void SetAnswerCallback(SdpCallback callback);
@@ -45,6 +46,8 @@ class WebRtcTransport final : public Transport {
   void* apply_answer_ = nullptr;
   void* apply_ice_ = nullptr;
   void* is_ready_ = nullptr;
+  void* control_buffered_amount_ = nullptr;
+  void* bulk_buffered_amount_ = nullptr;
   std::mutex callback_mutex_;
   ReceiveCallback callback_;
   SdpCallback offer_callback_;
