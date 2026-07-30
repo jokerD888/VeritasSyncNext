@@ -10,7 +10,7 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.ApplyMigrations();
-    VSYNC_CHECK(database.SchemaVersion() == 1);
+    VSYNC_CHECK(database.SchemaVersion() == 2);
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
     const auto task = database.FindTask("task-1");
     VSYNC_CHECK(task.has_value());
@@ -60,13 +60,16 @@ VSYNC_TEST(DatabasePersistsCompletedTransferChunksForResume) {
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
     veritassync::storage::TransferId transfer_id{};
     transfer_id.front() = 42;
-    database.CreateTransfer({transfer_id, "task-1", "device-b", "download", std::vector<std::uint8_t>(32, 7), "active", 100, 100});
+    database.CreateTransfer({transfer_id, "task-1", "device-b", "download", std::vector<std::uint8_t>(32, 7), "active", 100, 100, "nested/file.bin"});
     VSYNC_CHECK_THROWS(database.CreateTransfer({{}, "task-1", "device-b", "download", std::vector<std::uint8_t>(32, 7), "unknown", 100, 100}));
     VSYNC_CHECK_THROWS(database.CreateTransfer({transfer_id, "task-1", "device-b", "download", {1}, "active", 100, 100}));
     database.MarkTransferChunkCompleted(transfer_id, 3, 101);
     database.MarkTransferChunkCompleted(transfer_id, 0, 102);
     database.MarkTransferChunkCompleted(transfer_id, 3, 103);
     VSYNC_CHECK(database.CompletedTransferChunks(transfer_id) == std::vector<std::uint64_t>({0, 3}));
+    const auto active = database.FindActiveDownloadTransfer("task-1", "device-b", "nested/file.bin", std::vector<std::uint8_t>(32, 7));
+    VSYNC_CHECK(active.has_value());
+    VSYNC_CHECK(active->transfer_id == transfer_id);
   }
   std::filesystem::remove(path);
   std::filesystem::remove(path.string() + "-shm");

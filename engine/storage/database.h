@@ -5,6 +5,7 @@
 #include <functional>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,7 @@ struct TransferRecord {
   std::string state;
   std::int64_t created_at_ms = 0;
   std::int64_t updated_at_ms = 0;
+  std::string relative_path;
 };
 
 class Database {
@@ -70,6 +72,9 @@ class Database {
                                   std::int64_t updated_at_ms);
   void UpdateTransferState(const TransferId& transfer_id, std::string state,
                            std::int64_t updated_at_ms, std::optional<std::string> error_code = std::nullopt);
+  [[nodiscard]] std::optional<TransferRecord> FindActiveDownloadTransfer(
+      const std::string& task_id, const std::string& peer_device_id,
+      const std::string& relative_path, std::span<const std::uint8_t> file_hash) const;
   [[nodiscard]] std::optional<std::string> TransferState(const TransferId& transfer_id) const;
   [[nodiscard]] std::vector<std::uint64_t> CompletedTransferChunks(const TransferId& transfer_id) const;
   [[nodiscard]] int SchemaVersion() const;

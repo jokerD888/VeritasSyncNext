@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <limits>
 #include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -51,6 +52,11 @@ CREATE TABLE conflicts (
 );
 CREATE INDEX idx_file_records_task ON file_records(task_id);
 CREATE INDEX idx_transfers_task_state ON transfers(task_id, state);
+)sql";
+
+constexpr const char* kMigration2 = R"sql(
+ALTER TABLE transfers ADD COLUMN relative_path TEXT NOT NULL DEFAULT '';
+CREATE INDEX idx_transfers_active_download ON transfers(task_id, peer_device_id, relative_path, state);
 )sql";
 
 [[nodiscard]] const char* FileKindName(const FileKind kind) {
@@ -110,6 +116,7 @@ void ValidateTransfer(const TransferRecord& transfer) {
       transfer.state != "failed" && transfer.state != "cancelled") || transfer.created_at_ms <= 0 || transfer.updated_at_ms <= 0) {
     throw std::invalid_argument("transfer fields are invalid");
   }
+  if (!transfer.relative_path.empty()) ValidateRelativePath(transfer.relative_path);
 }
 
 void BindTransferId(sqlite3_stmt* const statement, const int index, const TransferId& transfer_id,
@@ -130,9 +137,14 @@ Database::~Database() { if (connection_ != nullptr) sqlite3_close(connection_); 
 void Database::Execute(const char* sql) const { char* message = nullptr; const int rc = sqlite3_exec(connection_, sql, nullptr, nullptr, &message); if (rc != SQLITE_OK) { std::string detail = message == nullptr ? sqlite3_errmsg(connection_) : message; sqlite3_free(message); throw std::runtime_error(detail); } }
 void Database::ApplyMigrations() {
   Execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at_ms INTEGER NOT NULL);");
-  if (SchemaVersion() >= 1) return;
-  Execute("BEGIN IMMEDIATE;");
-  try { Execute(kMigration1); Execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES(1, unixepoch() * 1000);"); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
+  if (SchemaVersion() < 1) {
+    Execute("BEGIN IMMEDIATE;");
+    try { Execute(kMigration1); Execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES(1, unixepoch() * 1000);"); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
+  }
+  if (SchemaVersion() < 2) {
+    Execute("BEGIN IMMEDIATE;");
+    try { Execute(kMigration2); Execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES(2, unixepoch() * 1000);"); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
+  }
 }
 void Database::CreateTask(const TaskDefinition& task) {
   if (task.task_id.empty() || task.root_path.empty()) throw std::invalid_argument("task id and root path are required");
@@ -272,7 +284,7 @@ void Database::InTransaction(const std::function<void()>& operation) {
 }
 void Database::CreateTransfer(const TransferRecord& transfer) {
   ValidateTransfer(transfer);
-  constexpr const char* sql = "INSERT INTO transfers(transfer_id, task_id, peer_device_id, direction, file_hash, state, created_at_ms, updated_at_ms) VALUES(?, ?, ?, ?, ?, ?, ?, ?);";
+  constexpr const char* sql = "INSERT INTO transfers(transfer_id, task_id, peer_device_id, direction, file_hash, state, created_at_ms, updated_at_ms, relative_path) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);";
   sqlite3_stmt* statement = nullptr;
   Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare transfer insert");
   const auto cleanup = [&] { sqlite3_finalize(statement); };
@@ -285,8 +297,55 @@ void Database::CreateTransfer(const TransferRecord& transfer) {
     Check(sqlite3_bind_text(statement, 6, transfer.state.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind transfer state");
     Check(sqlite3_bind_int64(statement, 7, transfer.created_at_ms), connection_, "bind transfer creation time");
     Check(sqlite3_bind_int64(statement, 8, transfer.updated_at_ms), connection_, "bind transfer update time");
+    Check(sqlite3_bind_text(statement, 9, transfer.relative_path.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind transfer path");
     Check(sqlite3_step(statement), connection_, "insert transfer");
     cleanup();
+  } catch (...) { cleanup(); throw; }
+}
+std::optional<TransferRecord> Database::FindActiveDownloadTransfer(
+    const std::string& task_id, const std::string& peer_device_id,
+    const std::string& relative_path, const std::span<const std::uint8_t> file_hash) const {
+  if (task_id.empty() || peer_device_id.empty() || file_hash.size() != 32) {
+    throw std::invalid_argument("active transfer lookup is invalid");
+  }
+  ValidateRelativePath(relative_path);
+  constexpr const char* sql = R"sql(
+SELECT transfer_id, direction, file_hash, state, created_at_ms, updated_at_ms, relative_path
+FROM transfers
+WHERE task_id=? AND peer_device_id=? AND relative_path=? AND file_hash=?
+  AND direction='download' AND state='active'
+ORDER BY created_at_ms DESC LIMIT 1;
+)sql";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare active transfer lookup");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind active transfer task");
+    Check(sqlite3_bind_text(statement, 2, peer_device_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind active transfer peer");
+    Check(sqlite3_bind_text(statement, 3, relative_path.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind active transfer path");
+    Check(sqlite3_bind_blob(statement, 4, file_hash.data(), static_cast<int>(file_hash.size()), SQLITE_TRANSIENT), connection_, "bind active transfer hash");
+    const int result = sqlite3_step(statement);
+    if (result == SQLITE_DONE) { cleanup(); return std::nullopt; }
+    Check(result, connection_, "read active transfer");
+    TransferRecord transfer;
+    const auto* id = static_cast<const std::uint8_t*>(sqlite3_column_blob(statement, 0));
+    const int id_size = sqlite3_column_bytes(statement, 0);
+    if (id == nullptr || id_size != static_cast<int>(transfer.transfer_id.size())) {
+      throw std::runtime_error("database contains an invalid transfer id");
+    }
+    std::copy(id, id + transfer.transfer_id.size(), transfer.transfer_id.begin());
+    transfer.task_id = task_id;
+    transfer.peer_device_id = peer_device_id;
+    transfer.direction = reinterpret_cast<const char*>(sqlite3_column_text(statement, 1));
+    const auto* hash = static_cast<const std::uint8_t*>(sqlite3_column_blob(statement, 2));
+    const int hash_size = sqlite3_column_bytes(statement, 2);
+    transfer.file_hash.assign(hash, hash + hash_size);
+    transfer.state = reinterpret_cast<const char*>(sqlite3_column_text(statement, 3));
+    transfer.created_at_ms = sqlite3_column_int64(statement, 4);
+    transfer.updated_at_ms = sqlite3_column_int64(statement, 5);
+    transfer.relative_path = reinterpret_cast<const char*>(sqlite3_column_text(statement, 6));
+    cleanup();
+    return transfer;
   } catch (...) { cleanup(); throw; }
 }
 void Database::MarkTransferChunkCompleted(const TransferId& transfer_id, const std::uint64_t chunk_index,
