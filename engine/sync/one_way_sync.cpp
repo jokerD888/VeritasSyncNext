@@ -137,10 +137,15 @@ void OneWaySyncNode::RefreshSource() {
 void OneWaySyncNode::Pump() {
   if (config_.role != protocol::Role::kSource) return;
   for (auto it = uploads_.begin(); it != uploads_.end();) {
-    const auto next = it->session->NextForTransport(
-        transport_.BufferedAmount(protocol::Channel::kBulk));
+    const auto next = it->session->NextForTransport(transport_.BufferedAmount(protocol::Channel::kBulk));
     if (next.has_value()) {
+      const auto frame = protocol::DecodeFrame(next->wire);
+      if (frame.type != protocol::FrameType::kChunk) throw std::logic_error("upload scheduler emitted a non-chunk frame");
+      ++statistics_.chunks_sent;
+      statistics_.bulk_bytes_sent += next->wire.size();
       transport_.Send(next->channel, std::move(next->wire));
+    } else if (it->session->HasPending()) {
+      ++statistics_.backpressure_pauses;
     }
     if (!it->session->HasPending()) it = uploads_.erase(it);
     else ++it;
@@ -158,6 +163,8 @@ bool OneWaySyncNode::TargetIsConverged() const {
 
 std::size_t OneWaySyncNode::PendingDownloadCount() const { return downloads_.size(); }
 
+const TransferStatistics& OneWaySyncNode::Statistics() const { return statistics_; }
+
 const std::optional<std::string>& OneWaySyncNode::LastError() const { return last_error_; }
 
 bool OneWaySyncNode::RolesCompatible(const protocol::Role peer_role) const {
@@ -167,7 +174,10 @@ bool OneWaySyncNode::RolesCompatible(const protocol::Role peer_role) const {
 
 void OneWaySyncNode::Send(const protocol::Channel channel, const protocol::FrameType type,
                           std::vector<std::uint8_t> payload) {
-  transport_.Send(channel, protocol::EncodeFrame({type, next_request_id_++, std::move(payload)}));
+  auto wire = protocol::EncodeFrame({type, next_request_id_++, std::move(payload)});
+  if (channel == protocol::Channel::kControl) statistics_.control_bytes_sent += wire.size();
+  else statistics_.bulk_bytes_sent += wire.size();
+  transport_.Send(channel, std::move(wire));
 }
 
 void OneWaySyncNode::SendManifest() {
@@ -177,6 +187,8 @@ void OneWaySyncNode::SendManifest() {
 
 void OneWaySyncNode::Receive(const protocol::Channel channel, std::vector<std::uint8_t> wire) {
   try {
+    if (channel == protocol::Channel::kControl) statistics_.control_bytes_received += wire.size();
+    else statistics_.bulk_bytes_received += wire.size();
     const auto frame = protocol::DecodeFrame(wire);
     if (!protocol::IsAllowedOn(channel, frame.type)) {
       throw std::invalid_argument("wrong_channel");
@@ -252,6 +264,7 @@ void OneWaySyncNode::DeleteFilesAbsentFrom(const protocol::Manifest& manifest) {
       continue;
     }
     writer_.RemoveFile(record.relative_path);
+    ++statistics_.files_deleted;
     config_.database.RecordTombstone(config_.task_id, record.relative_path, common::NewUuidV4(),
                                      config_.peer_device_id, 0, NowMilliseconds());
   }
@@ -273,6 +286,7 @@ void OneWaySyncNode::BeginDownload(const protocol::ManifestEntry& entry) {
   if (entry.size == 0) {
     const std::vector<std::uint8_t> empty;
     writer_.WriteAtomically(entry.relative_path, empty);
+    ++statistics_.files_committed;
     const auto hash = DecodeHash(entry.content_hash);
     config_.database.UpsertFileRecord({config_.task_id, entry.relative_path, storage::FileKind::kFile,
                                         0, 0, {hash.begin(), hash.end()}, common::NewUuidV4(),
@@ -342,6 +356,7 @@ void OneWaySyncNode::AcceptChunk(const protocol::Chunk& chunk) {
   if (download == downloads_.end()) throw std::invalid_argument("chunk does not belong to an active download");
   const auto index = chunk.offset / protocol::kLogicalChunkSize;
   download->receiver->AcceptChunk(index, chunk.offset, chunk.bytes, chunk.chunk_hash, NowMilliseconds());
+  ++statistics_.chunks_received;
   if (config_.database.CompletedTransferChunks(download->transfer_id).size() != download->chunk_count) return;
   CommitDownload(*download);
   downloads_.erase(download);
@@ -349,6 +364,7 @@ void OneWaySyncNode::AcceptChunk(const protocol::Chunk& chunk) {
 
 void OneWaySyncNode::CommitDownload(ActiveDownload& download) {
   download.receiver->Commit(NowMilliseconds());
+  ++statistics_.files_committed;
   config_.database.UpsertFileRecord({config_.task_id, download.entry.relative_path,
                                       storage::FileKind::kFile, download.entry.size, 0,
                                       {download.hash.begin(), download.hash.end()}, common::NewUuidV4(),

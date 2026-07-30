@@ -179,4 +179,9 @@ VSYNC_TEST(OneWaySyncAppliesMultipleFilesIncludingEmptyFile) {
   VSYNC_CHECK(ReadBytes(directories.Target() / "notes.txt") == text);
   VSYNC_CHECK(std::filesystem::is_regular_file(directories.Target() / "nested/empty.bin"));
   VSYNC_CHECK(std::filesystem::file_size(directories.Target() / "nested/empty.bin") == 0);
+  VSYNC_CHECK(source.Statistics().chunks_sent == 1);
+  VSYNC_CHECK(source.Statistics().bulk_bytes_sent > 0);
+  VSYNC_CHECK(target.Statistics().chunks_received == 1);
+  VSYNC_CHECK(target.Statistics().files_committed == 2);
+  VSYNC_CHECK(target.Statistics().control_bytes_received > 0);
 }

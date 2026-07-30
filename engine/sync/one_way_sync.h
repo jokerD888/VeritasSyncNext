@@ -6,6 +6,7 @@
 #include "engine/transport/transport.h"
 
 #include <filesystem>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,6 +25,18 @@ struct OneWaySyncConfig {
   storage::Database& database;
 };
 
+struct TransferStatistics {
+  std::uint64_t control_bytes_sent = 0;
+  std::uint64_t bulk_bytes_sent = 0;
+  std::uint64_t control_bytes_received = 0;
+  std::uint64_t bulk_bytes_received = 0;
+  std::uint64_t chunks_sent = 0;
+  std::uint64_t chunks_received = 0;
+  std::uint64_t files_committed = 0;
+  std::uint64_t files_deleted = 0;
+  std::uint64_t backpressure_pauses = 0;
+};
+
 // A single-source/single-target session. The owner drives Pump from its event
 // loop; Source scanning and Target file writes remain outside the transport API.
 class OneWaySyncNode {
@@ -36,6 +49,7 @@ class OneWaySyncNode {
   [[nodiscard]] bool HandshakeComplete() const;
   [[nodiscard]] bool TargetIsConverged() const;
   [[nodiscard]] std::size_t PendingDownloadCount() const;
+  [[nodiscard]] const TransferStatistics& Statistics() const;
   [[nodiscard]] const std::optional<std::string>& LastError() const;
 
  private:
@@ -70,6 +84,7 @@ class OneWaySyncNode {
   std::vector<PendingUpload> uploads_;
   std::optional<protocol::Manifest> received_manifest_;
   std::optional<std::string> last_error_;
+  TransferStatistics statistics_;
 };
 
 }  // namespace veritassync::sync
