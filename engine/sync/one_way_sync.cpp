@@ -142,7 +142,7 @@ void OneWaySyncNode::Pump() {
     if (next.has_value()) {
       transport_.Send(next->channel, std::move(next->wire));
     }
-    if (it->session->PendingBytes() == 0) it = uploads_.erase(it);
+    if (!it->session->HasPending()) it = uploads_.erase(it);
     else ++it;
   }
 }

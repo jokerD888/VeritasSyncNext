@@ -4,6 +4,7 @@
 #include "engine/transport/send_scheduler.h"
 
 #include <cstdint>
+#include <deque>
 #include <optional>
 
 namespace veritassync::sync {
@@ -16,10 +17,12 @@ class UploadSession {
   void QueueRequested(const protocol::FileRequest& request);
   [[nodiscard]] std::optional<transport::PendingSend> NextForTransport(std::size_t buffered_bytes);
   [[nodiscard]] std::size_t PendingBytes() const;
+  [[nodiscard]] bool HasPending() const;
 
  private:
   ChunkSource source_;
   transport::SendScheduler scheduler_;
+  std::deque<protocol::ChunkRange> requested_ranges_;
   std::uint64_t next_request_id_ = 1;
 };
 
