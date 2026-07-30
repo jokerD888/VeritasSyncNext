@@ -65,6 +65,10 @@ constexpr std::size_t kResumeBelowBytes = 1U * 1024U * 1024U;
   return (size + protocol::kLogicalChunkSize - 1U) / protocol::kLogicalChunkSize;
 }
 
+[[nodiscard]] bool IsDirectoryEntry(const protocol::ManifestEntry& entry) {
+  return entry.content_hash.empty();
+}
+
 }  // namespace
 
 struct OneWaySyncNode::SourceFile {
@@ -125,7 +129,11 @@ void OneWaySyncNode::RefreshSource() {
   source_manifest_ = {++manifest_revision_, {}};
   source_files_.clear();
   for (const auto& entry : snapshot) {
-    if (entry.kind != storage::SnapshotKind::kFile || !entry.content_hash.has_value()) continue;
+    if (entry.kind == storage::SnapshotKind::kDirectory) {
+      source_manifest_.entries.push_back({entry.relative_path, 0, {}});
+      continue;
+    }
+    if (!entry.content_hash.has_value()) throw std::logic_error("source file snapshot has no hash");
     source_manifest_.entries.push_back(
         {entry.relative_path, entry.size, EncodeHash(*entry.content_hash)});
     source_files_.push_back({config_.task_root / std::filesystem::path(entry.relative_path),
@@ -238,7 +246,7 @@ void OneWaySyncNode::ApplyManifest(const protocol::Manifest& manifest) {
   paths.reserve(manifest.entries.size());
   for (const auto& entry : manifest.entries) {
     (void)storage::ResolveTaskPath(config_.task_root, entry.relative_path);
-    (void)DecodeHash(entry.content_hash);
+    if (!IsDirectoryEntry(entry)) (void)DecodeHash(entry.content_hash);
     paths.push_back(entry.relative_path);
   }
   std::ranges::sort(paths);
@@ -249,6 +257,16 @@ void OneWaySyncNode::ApplyManifest(const protocol::Manifest& manifest) {
   received_manifest_ = manifest;
   DeleteFilesAbsentFrom(manifest);
   for (const auto& entry : manifest.entries) {
+    if (IsDirectoryEntry(entry)) {
+      if (!TargetAlreadyHas(entry)) {
+        writer_.EnsureDirectory(entry.relative_path);
+        config_.database.UpsertFileRecord({config_.task_id, entry.relative_path,
+                                            storage::FileKind::kDirectory, 0, 0, {},
+                                            common::NewUuidV4(), config_.peer_device_id, 0,
+                                            std::nullopt});
+      }
+      continue;
+    }
     if (!TargetAlreadyHas(entry)) BeginDownload(entry);
   }
 }
@@ -258,27 +276,40 @@ void OneWaySyncNode::DeleteFilesAbsentFrom(const protocol::Manifest& manifest) {
   source_paths.reserve(manifest.entries.size());
   for (const auto& entry : manifest.entries) source_paths.push_back(entry.relative_path);
   std::ranges::sort(source_paths);
-  for (const auto& record : config_.database.ListFileRecords(config_.task_id)) {
-    if (record.kind != storage::FileKind::kFile ||
+  auto records = config_.database.ListFileRecords(config_.task_id);
+  std::ranges::sort(records, [](const storage::FileRecord& left, const storage::FileRecord& right) {
+    return left.relative_path.size() > right.relative_path.size();
+  });
+  for (const auto& record : records) {
+    if (record.kind == storage::FileKind::kTombstone ||
         std::binary_search(source_paths.begin(), source_paths.end(), record.relative_path)) {
       continue;
     }
-    writer_.RemoveFile(record.relative_path);
-    ++statistics_.files_deleted;
+    if (record.kind == storage::FileKind::kFile) {
+      writer_.RemoveFile(record.relative_path);
+      ++statistics_.files_deleted;
+    } else if (record.kind == storage::FileKind::kDirectory) {
+      writer_.RemoveEmptyDirectory(record.relative_path);
+    }
     config_.database.RecordTombstone(config_.task_id, record.relative_path, common::NewUuidV4(),
                                      config_.peer_device_id, 0, NowMilliseconds());
   }
 }
 
 bool OneWaySyncNode::TargetAlreadyHas(const protocol::ManifestEntry& entry) const {
-  const auto hash = DecodeHash(entry.content_hash);
+  const auto path = storage::ResolveTaskPath(config_.task_root, entry.relative_path);
+  std::error_code error;
   const auto record = config_.database.FindFileRecord(config_.task_id, entry.relative_path);
+  if (IsDirectoryEntry(entry)) {
+    const auto status = std::filesystem::symlink_status(path, error);
+    return record.has_value() && record->kind == storage::FileKind::kDirectory &&
+           !error && std::filesystem::is_directory(status) && !std::filesystem::is_symlink(status);
+  }
+  const auto hash = DecodeHash(entry.content_hash);
   if (!record.has_value() || record->kind != storage::FileKind::kFile || record->size != entry.size ||
       record->content_hash != std::vector<std::uint8_t>(hash.begin(), hash.end())) {
     return false;
   }
-  const auto path = storage::ResolveTaskPath(config_.task_root, entry.relative_path);
-  std::error_code error;
   return std::filesystem::is_regular_file(path, error) && !error && common::Blake3File(path) == hash;
 }
 

@@ -27,6 +27,8 @@ class SafeFileWriter {
   void CommitPartial(std::string_view relative_path, std::uint64_t expected_size,
                      const common::ContentHash& expected_hash) const;
   void RemoveFile(std::string_view relative_path) const;
+  void EnsureDirectory(std::string_view relative_path) const;
+  void RemoveEmptyDirectory(std::string_view relative_path) const;
 
  private:
   std::filesystem::path task_root_;

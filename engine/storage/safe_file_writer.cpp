@@ -215,4 +215,35 @@ void SafeFileWriter::RemoveFile(const std::string_view relative_path) const {
   }
 }
 
+void SafeFileWriter::EnsureDirectory(const std::string_view relative_path) const {
+  const auto directory = ResolveTaskPath(task_root_, relative_path);
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(directory, error);
+  if (error && error != std::errc::no_such_file_or_directory) {
+    throw std::runtime_error("cannot inspect synchronized directory");
+  }
+  if (std::filesystem::exists(status)) {
+    if (!std::filesystem::is_directory(status) || std::filesystem::is_symlink(status)) {
+      throw std::invalid_argument("synchronized directory path is unsafe");
+    }
+    return;
+  }
+  EnsureSafeDirectory(directory);
+}
+
+void SafeFileWriter::RemoveEmptyDirectory(const std::string_view relative_path) const {
+  const auto directory = ResolveTaskPath(task_root_, relative_path);
+  RejectSymlink(directory, "synchronized directory must not be a symlink");
+  std::error_code error;
+  const auto status = std::filesystem::status(directory, error);
+  if (error == std::errc::no_such_file_or_directory) return;
+  if (error) throw std::runtime_error("cannot inspect synchronized directory for deletion");
+  if (!std::filesystem::is_directory(status)) {
+    throw std::invalid_argument("synchronized directory deletion requires a directory");
+  }
+  if (!std::filesystem::remove(directory, error) || error) {
+    throw std::runtime_error("cannot delete non-empty synchronized directory");
+  }
+}
+
 }  // namespace veritassync::storage

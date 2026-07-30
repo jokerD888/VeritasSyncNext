@@ -95,3 +95,16 @@ VSYNC_TEST(SafeFileWriterRemovesOnlyRegularSynchronizedFiles) {
   writer.RemoveFile("nested/file.bin");
   VSYNC_CHECK_THROWS(writer.RemoveFile("nested"));
 }
+
+VSYNC_TEST(SafeFileWriterCreatesAndRemovesOnlyEmptyDirectories) {
+  TemporaryDirectory directory;
+  veritassync::storage::SafeFileWriter writer(directory.Path());
+  writer.EnsureDirectory("nested/empty");
+  VSYNC_CHECK(std::filesystem::is_directory(directory.Path() / "nested/empty"));
+  writer.RemoveEmptyDirectory("nested/empty");
+  VSYNC_CHECK(!std::filesystem::exists(directory.Path() / "nested/empty"));
+  writer.EnsureDirectory("nested/nonempty");
+  const std::vector<std::uint8_t> bytes{1};
+  writer.WriteAtomically("nested/nonempty/file.bin", bytes);
+  VSYNC_CHECK_THROWS(writer.RemoveEmptyDirectory("nested/nonempty"));
+}
