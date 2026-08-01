@@ -5,7 +5,6 @@ import {
   sendNotification
 } from "@tauri-apps/plugin-notification";
 import { load } from "@tauri-apps/plugin-store";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type ColorMode = "dark" | "light" | "system";
@@ -49,10 +48,6 @@ export async function applyColorMode(mode: ColorMode): Promise<ResolvedTheme> {
     // Browser-based UI tests do not expose a native window; CSS still updates.
   }
   return theme;
-}
-
-export async function readEngineLog(): Promise<string> {
-  return invoke<string>("read_engine_log");
 }
 
 export function logInfo(message: string): void {

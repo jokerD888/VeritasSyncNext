@@ -2,7 +2,6 @@
 #include "engine/storage/ignore_rules.h"
 #include "engine/storage/manifest_scanner.h"
 #include "engine/common/uuid.h"
-#include "engine/common/logger.h"
 #include "engine/ipc/ipc_service.h"
 #include "engine/ipc/named_pipe_server.h"
 #include "engine/sync/snapshot_reconciler.h"
@@ -13,7 +12,6 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
-#include <spdlog/spdlog.h>
 #include <stdexcept>
 #include <string>
 
@@ -129,23 +127,11 @@ int main(int argc, char** argv) {
       else if (argument == "--mock-task-id") mock_task_id = value;
       else throw std::invalid_argument("unknown option: " + argument);
     }
-    const std::filesystem::path log_path = db_path.empty()
-        ? std::filesystem::current_path() / "veritassync-next.log"
-        : std::filesystem::path(db_path).parent_path() / "veritassync-next.log";
-    veritassync::common::InitializeLogger(log_path.string());
-    if (veritassync::common::g_logger) {
-      veritassync::common::g_logger->info("VeritasSyncNext engine starting");
-      veritassync::common::g_logger->flush();
-    }
     if (ipc_serve) {
       if (db_path.empty() || pipe_name.empty()) throw std::invalid_argument("--ipc-serve requires --db and --pipe");
       veritassync::storage::Database database(db_path);
       database.ApplyMigrations();
       database.RecordEngineEvent({0, std::nullopt, "info", "IPC server started", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()});
-      if (veritassync::common::g_logger) {
-        veritassync::common::g_logger->info("IPC server listening on {}", pipe_name);
-        veritassync::common::g_logger->flush();
-      }
       veritassync::ipc::IpcService service(database);
       return veritassync::ipc::RunNamedPipeServer(service, pipe_name);
     }
@@ -197,7 +183,6 @@ int main(int argc, char** argv) {
     }
     return 0;
   } catch (const std::exception& error) {
-    if (veritassync::common::g_logger) veritassync::common::g_logger->error("Engine stopped: {}", error.what());
     std::cerr << "error: " << error.what() << "\n";
     return 1;
   }

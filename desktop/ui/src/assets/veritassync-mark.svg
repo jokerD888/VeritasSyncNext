@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true">
+  <defs>
+    <linearGradient id="veritassync-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0ea5e9" />
+      <stop offset="100%" stop-color="#6366f1" />
+    </linearGradient>
+  </defs>
+  <circle cx="256" cy="256" r="240" fill="#f8fafc" />
+  <path d="M180 176 A80 80 0 1 0 180 336 C220 336 240 300 256 256 C272 212 292 176 332 176 A80 80 0 1 1 332 336" fill="none" stroke="url(#veritassync-gradient)" stroke-width="48" stroke-linecap="round" />
+  <circle cx="130" cy="256" r="32" fill="#0f172a" />
+  <circle cx="382" cy="256" r="32" fill="#0f172a" />
+</svg>

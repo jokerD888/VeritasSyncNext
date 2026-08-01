@@ -45,12 +45,8 @@ the UI never reads the SQLite database or sync roots directly.
 The main window uses a self-drawn title bar on Windows, including drag,
 minimize, maximize, and close controls. Desktop preferences default to dark
 mode and persist a dark/light/system choice; the selected mode is also passed
-to the Tauri window so native menus follow it. The Engine uses the established
-VeritasSync asynchronous rolling-file policy: a 8192-entry async queue,
-5 MiB files, three retained files, warning-level immediate flushes, and a
-background flush for the live terminal. Its file is
-`veritassync-next.log` beside the Engine state database; the UI reads only a
-bounded tail through an explicit Rust command.
+to the Tauri window so native menus follow it. Engine activity is retained as
+structured SQLite events and requested through the versioned IPC channel.
 
 The window uses the Windows 11 Mica backdrop only at the shell level. Content
 panels are deliberately opaque and high contrast, so sync data remains readable
