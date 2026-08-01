@@ -35,6 +35,8 @@ On launch, the Rust shell pings the per-user pipe. If unavailable, it starts
 `veritassync-engine --ipc-serve` as a detached process and waits for its ping.
 Subsequent shell launches reuse the server. A request failure attempts one
 engine re-discovery/restart; no UI restart deletes or migrates state itself.
+The message-mode pipe uses a protected owner-only Windows DACL, so another local
+account cannot connect merely by knowing its name.
 
 Migration 4 adds `engine_events`, a durable, bounded-query event source for UI
 status/log rendering. Task deletion removes task-owned transfer/version/conflict

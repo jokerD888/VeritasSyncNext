@@ -63,7 +63,7 @@ target_include_directories(veritassync_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 target_link_libraries(veritassync_engine PUBLIC unofficial::sqlite3::sqlite3)
 target_link_libraries(veritassync_engine PUBLIC BLAKE3::blake3)
 if(WIN32)
-  target_link_libraries(veritassync_engine PRIVATE kernel32 bcrypt)
+  target_link_libraries(veritassync_engine PRIVATE kernel32 bcrypt advapi32)
 endif()
 
 veritassync_apply_warnings(veritassync_engine)
