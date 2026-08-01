@@ -15,6 +15,8 @@ The engine owns SQLite migrations, task state, conflict state, and events.
 `desktop/ui` is a dependency-free Tauri webview interface with:
 
 - task overview plus a new-task wizard for one-way and bidirectional modes;
+- an explicit per-task scan/recover control that delegates local reconciliation
+  to the engine;
 - native folder selection;
 - task deletion (without deleting the selected local root);
 - persisted engine status/event log polling;
