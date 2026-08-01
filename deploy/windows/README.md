@@ -59,3 +59,9 @@ Configure these repository Actions secrets before triggering it:
 - `TAURI_SIGNING_PRIVATE_KEY` (the contents of the protected private key) and
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`;
 - `VERITASSYNC_UPDATER_PUBKEY` (the matching public-key string).
+
+For a small internal beta only, manually dispatch the workflow with both
+`prerelease` and `allowUntrustedCertificate` enabled. This allows a self-signed
+certificate solely to exercise the installer and Tauri update path; it cannot
+replace the stable `latest` release. Tag-triggered releases always require a
+trusted certificate.

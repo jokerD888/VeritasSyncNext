@@ -4,6 +4,17 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Publish as a GitHub prerelease without replacing the stable latest release
+        required: true
+        type: boolean
+        default: false
+      allowUntrustedCertificate:
+        description: Permit a self-signed certificate for a prerelease-only test build
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -29,7 +40,12 @@ jobs:
         run: cargo install tauri-cli --version "^2" --locked
       - name: Build signed release
         shell: pwsh
-        run: ./deploy/windows/build-release.ps1
+        run: |
+          if ("${{ inputs.allowUntrustedCertificate }}" -eq "true") {
+            ./deploy/windows/build-release.ps1 -AllowUntrustedCertificate
+          } else {
+            ./deploy/windows/build-release.ps1
+          }
       - name: Publish GitHub Release and update manifest
         shell: pwsh
         env:
@@ -37,6 +53,9 @@ jobs:
         run: |
           $version = (cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
           $tag = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "v$version" }
+          $prerelease = "${{ inputs.prerelease }}" -eq "true"
+          $untrusted = "${{ inputs.allowUntrustedCertificate }}" -eq "true"
+          if ($untrusted -and -not $prerelease) { throw "A self-signed certificate is permitted only for a prerelease" }
           if ($tag -ne "v$version") { throw "Tag $tag does not match desktop version v$version" }
           $nsis = Get-ChildItem "desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File | Select-Object -First 1
           if ($null -eq $nsis) { throw "NSIS updater artifact was not produced" }
@@ -46,7 +65,11 @@ jobs:
             Where-Object { $_.Extension -in ".exe", ".msi", ".sig" } |
             Select-Object -ExpandProperty FullName
           gh release view $tag *> $null
-          if ($LASTEXITCODE -ne 0) { gh release create $tag --target $env:GITHUB_SHA --title "VeritasSync Next $version" --generate-notes }
+          if ($LASTEXITCODE -ne 0) {
+            $createArguments = @("release", "create", $tag, "--target", $env:GITHUB_SHA, "--title", "VeritasSync Next $version", "--generate-notes")
+            if ($prerelease) { $createArguments += "--prerelease" }
+            & gh @createArguments
+          }
           gh release upload $tag $releaseFiles --clobber
           if ($LASTEXITCODE -ne 0) { throw "GitHub release artifact upload failed" }
           $assetName = [uri]::EscapeDataString($nsis.Name)

@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-  [string]$TargetTriple = "x86_64-pc-windows-msvc"
+  [string]$TargetTriple = "x86_64-pc-windows-msvc",
+  [switch]$AllowUntrustedCertificate
 )
 
 $required = @(
@@ -38,6 +39,13 @@ if ([string]::IsNullOrWhiteSpace($signTool)) {
 function Sign-And-Verify([string]$Path, [string]$CertificatePath) {
   & $signTool sign /fd SHA256 /f $CertificatePath /p $env:WINDOWS_CERTIFICATE_PASSWORD /tr "http://timestamp.digicert.com" /td SHA256 $Path
   if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed: $Path" }
+  if ($AllowUntrustedCertificate) {
+    $signature = Get-AuthenticodeSignature -FilePath $Path
+    if ($signature.SignatureType -ne "Authenticode" -or $null -eq $signature.SignerCertificate) {
+      throw "Self-signed Authenticode signature was not embedded: $Path"
+    }
+    return
+  }
   & $signTool verify /pa /v $Path
   if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed: $Path" }
 }
