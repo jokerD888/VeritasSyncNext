@@ -41,8 +41,16 @@ jobs:
       - name: Build signed release
         shell: pwsh
         run: |
-          if ("${{ inputs.allowUntrustedCertificate }}" -eq "true") {
-            ./deploy/windows/build-release.ps1 -AllowUntrustedCertificate
+          $prerelease = "${{ inputs.prerelease }}" -eq "true"
+          $untrusted = "${{ inputs.allowUntrustedCertificate }}" -eq "true"
+          if ($untrusted -and -not $prerelease) { throw "A self-signed certificate is permitted only for a prerelease" }
+          if ($prerelease) {
+            $env:VERITASSYNC_UPDATE_ENDPOINT = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/beta-channel/latest.json"
+            if ($untrusted) {
+              ./deploy/windows/build-release.ps1 -AllowUntrustedCertificate -BetaChannel
+            } else {
+              ./deploy/windows/build-release.ps1 -BetaChannel
+            }
           } else {
             ./deploy/windows/build-release.ps1
           }
@@ -87,5 +95,13 @@ jobs:
           } | ConvertTo-Json -Depth 5
           $manifestPath = Join-Path $env:RUNNER_TEMP "latest.json"
           Set-Content -LiteralPath $manifestPath -Value $manifest -Encoding utf8NoBOM
-          gh release upload $tag $manifestPath --clobber
+          $manifestRelease = $tag
+          if ($prerelease) {
+            $manifestRelease = "beta-channel"
+            gh release view $manifestRelease *> $null
+            if ($LASTEXITCODE -ne 0) {
+              gh release create $manifestRelease --target $env:GITHUB_SHA --title "VeritasSync Next Beta update channel" --notes "Machine-readable Tauri beta update manifest." --prerelease
+            }
+          }
+          gh release upload $manifestRelease $manifestPath --clobber
           if ($LASTEXITCODE -ne 0) { throw "GitHub update manifest upload failed" }

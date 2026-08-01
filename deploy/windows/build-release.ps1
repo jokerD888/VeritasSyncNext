@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$TargetTriple = "x86_64-pc-windows-msvc",
-  [switch]$AllowUntrustedCertificate
+  [switch]$AllowUntrustedCertificate,
+  [switch]$BetaChannel
 )
 
 $required = @(
@@ -16,6 +17,12 @@ foreach ($name in $required) {
   if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
     throw "Missing required release secret: $name"
   }
+}
+if ($AllowUntrustedCertificate -and -not $BetaChannel) {
+  throw "A self-signed certificate is permitted only for a beta-channel build."
+}
+if ($BetaChannel -and -not ([Environment]::GetEnvironmentVariable("VERITASSYNC_UPDATE_ENDPOINT") -match "/releases/download/beta-channel/latest\\.json$")) {
+  throw "A beta-channel build must use the fixed beta-channel update manifest endpoint."
 }
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path

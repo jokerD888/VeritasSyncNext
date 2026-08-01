@@ -62,6 +62,7 @@ Configure these repository Actions secrets before triggering it:
 
 For a small internal beta only, manually dispatch the workflow with both
 `prerelease` and `allowUntrustedCertificate` enabled. This allows a self-signed
-certificate solely to exercise the installer and Tauri update path; it cannot
-replace the stable `latest` release. Tag-triggered releases always require a
-trusted certificate.
+certificate solely to exercise the installer and Tauri update path. The build
+uses the fixed `beta-channel/latest.json` feed, which is a prerelease release
+asset and never replaces the stable `latest` release. Tag-triggered releases
+always require a trusted certificate.
