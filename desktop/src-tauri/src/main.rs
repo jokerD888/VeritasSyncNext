@@ -3,7 +3,14 @@
 mod ipc;
 
 use serde::Serialize;
-use std::{fs, path::PathBuf, process::Command, thread, time::Duration};
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    sync::{Mutex, OnceLock},
+    thread,
+    time::Duration,
+};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -16,6 +23,11 @@ struct EngineRuntime {
     pipe: String,
     executable: PathBuf,
 }
+
+// UI startup, IPC retries, and the watchdog can all ask for the sidecar at
+// once. Serialize the complete probe/spawn/ready sequence so they cannot
+// create competing servers for the same named pipe.
+static ENGINE_START_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn runtime(app: &AppHandle) -> Result<EngineRuntime, String> {
     let data = app
@@ -68,6 +80,10 @@ fn runtime(app: &AppHandle) -> Result<EngineRuntime, String> {
 }
 
 fn ensure(app: &AppHandle) -> Result<EngineRuntime, String> {
+    let _startup = ENGINE_START_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "engine 启动锁异常".to_string())?;
     let runtime = runtime(app)?;
     if ipc::request(&runtime.pipe, "ping", &[]).is_ok() {
         return Ok(runtime);

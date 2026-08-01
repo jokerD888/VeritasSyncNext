@@ -153,6 +153,8 @@ export function App() {
   const [preferences, setPreferences] = useState<DesktopPreferences>({ notificationsEnabled: true, colorMode: "dark" });
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("dark");
   const lastEngineError = useRef<string | null>(null);
+  const engineWasOnline = useRef(false);
+  const lastEngineNoticeAt = useRef(0);
 
   useEffect(() => {
     void readPreferences()
@@ -178,15 +180,21 @@ export function App() {
       await engine.ensure();
       const [nextStatus, nextTasks, nextEvents] = await Promise.all([engine.status(), engine.tasks(), engine.events(100)]);
       const nextConflicts = (await Promise.all(nextTasks.map((task) => engine.conflicts(task.id)))).flat();
-      setStatus(nextStatus); setTasks(nextTasks); setEvents(nextEvents); setConflicts(nextConflicts); setEngineError(null); lastEngineError.current = null;
+      setStatus(nextStatus); setTasks(nextTasks); setEvents(nextEvents); setConflicts(nextConflicts); setEngineError(null); lastEngineError.current = null; engineWasOnline.current = true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setEngineError(message);
-      logError(`Engine refresh failed: ${message}`);
-      if (lastEngineError.current !== message) {
+      const isNewFailure = lastEngineError.current !== message;
+      if (isNewFailure) logError(`Engine refresh failed: ${message}`);
+      // Starting a sidecar is allowed to take a few seconds. Never turn an
+      // initial connection retry into a Windows notification; only report a
+      // loss after this window has already observed the Engine online.
+      if (engineWasOnline.current && isNewFailure && Date.now() - lastEngineNoticeAt.current > 5 * 60_000) {
         lastEngineError.current = message;
+        lastEngineNoticeAt.current = Date.now();
         void notify(preferences, "VeritasSync 引擎不可用", message);
       }
+      lastEngineError.current = message;
       if (!quiet) toast.error("Engine 不可用", { description: message });
     } finally { if (!quiet) setRefreshing(false); }
   }, [preferences]);

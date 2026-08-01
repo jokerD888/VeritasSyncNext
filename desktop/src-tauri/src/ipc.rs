@@ -1,10 +1,16 @@
-use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
+use std::{
+    ffi::OsStr,
+    os::windows::ffi::OsStrExt,
+    thread,
+    time::Duration,
+};
 
 type Handle = isize;
 const INVALID_HANDLE_VALUE: Handle = -1isize;
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 const OPEN_EXISTING: u32 = 3;
+const ERROR_PIPE_BUSY: u32 = 231;
 
 #[link(name = "kernel32")]
 extern "system" {
@@ -32,6 +38,8 @@ extern "system" {
         overlapped: *mut (),
     ) -> i32;
     fn CloseHandle(handle: Handle) -> i32;
+    fn GetLastError() -> u32;
+    fn WaitNamedPipeW(name: *const u16, timeout: u32) -> i32;
 }
 
 fn escape(value: &str) -> String {
@@ -52,17 +60,33 @@ pub fn request(pipe: &str, command: &str, args: &[String]) -> Result<String, Str
         message.push_str(&escape(argument));
     }
     let wide: Vec<u16> = OsStr::new(pipe).encode_wide().chain(Some(0)).collect();
-    let handle = unsafe {
-        CreateFileW(
-            wide.as_ptr(),
-            GENERIC_READ | GENERIC_WRITE,
-            0,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            0,
-            0,
-        )
-    };
+    // The Engine processes one message per pipe instance. Several UI reads may
+    // arrive together, so a busy pipe means "healthy but serving another
+    // request", not "engine unavailable". Wait briefly before declaring it
+    // unavailable; this also prevents the shell from spawning duplicate
+    // sidecars during normal dashboard refreshes.
+    let mut handle = INVALID_HANDLE_VALUE;
+    for _ in 0..12 {
+        handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                0,
+            )
+        };
+        if handle != INVALID_HANDLE_VALUE {
+            break;
+        }
+        if unsafe { GetLastError() } != ERROR_PIPE_BUSY {
+            break;
+        }
+        let _ = unsafe { WaitNamedPipeW(wide.as_ptr(), 200) };
+        thread::sleep(Duration::from_millis(10));
+    }
     if handle == INVALID_HANDLE_VALUE {
         return Err("IPC engine is unavailable".to_string());
     }
