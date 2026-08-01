@@ -1,0 +1,67 @@
+name: Release Windows
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      VERITASSYNC_UPDATE_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+      VERITASSYNC_UPDATER_PUBKEY: ${{ secrets.VERITASSYNC_UPDATER_PUBKEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Expose vcpkg to CMake presets
+        shell: pwsh
+        run: "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+      - name: Build signed release
+        shell: pwsh
+        run: ./deploy/windows/build-release.ps1
+      - name: Publish GitHub Release and update manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (cargo metadata --manifest-path desktop/src-tauri/Cargo.toml --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          $tag = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "v$version" }
+          if ($tag -ne "v$version") { throw "Tag $tag does not match desktop version v$version" }
+          $nsis = Get-ChildItem "desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File | Select-Object -First 1
+          if ($null -eq $nsis) { throw "NSIS updater artifact was not produced" }
+          $signaturePath = "$($nsis.FullName).sig"
+          if (-not (Test-Path -LiteralPath $signaturePath -PathType Leaf)) { throw "Missing updater signature: $signaturePath" }
+          $releaseFiles = Get-ChildItem "desktop/src-tauri/target/release/bundle" -Recurse -File |
+            Where-Object { $_.Extension -in ".exe", ".msi", ".sig" } |
+            Select-Object -ExpandProperty FullName
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) { gh release create $tag --target $env:GITHUB_SHA --title "VeritasSync Next $version" --generate-notes }
+          gh release upload $tag $releaseFiles --clobber
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release artifact upload failed" }
+          $assetName = [uri]::EscapeDataString($nsis.Name)
+          $manifest = @{
+            version = $version
+            notes = "VeritasSync Next $version"
+            pub_date = [DateTime]::UtcNow.ToString("o")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = (Get-Content -LiteralPath $signaturePath -Raw).Trim()
+                url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag/$assetName"
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+          $manifestPath = Join-Path $env:RUNNER_TEMP "latest.json"
+          Set-Content -LiteralPath $manifestPath -Value $manifest -Encoding utf8NoBOM
+          gh release upload $tag $manifestPath --clobber
+          if ($LASTEXITCODE -ne 0) { throw "GitHub update manifest upload failed" }

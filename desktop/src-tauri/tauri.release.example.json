@@ -5,5 +5,8 @@
       "endpoints": ["__VERITASSYNC_UPDATE_ENDPOINT__"],
       "pubkey": "__VERITASSYNC_UPDATER_PUBKEY__"
     }
+  },
+  "bundle": {
+    "createUpdaterArtifacts": true
   }
 }

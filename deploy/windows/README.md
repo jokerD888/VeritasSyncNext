@@ -35,7 +35,27 @@ by the engine, so a UI upgrade cannot mutate the sync database directly.
 ## Signing and updates
 
 Generate a release-only Tauri config from the environment in CI, adding the
-updater endpoint and public key. Sign both `veritassync-engine.exe` and the MSI/
-NSIS output with the release certificate, verify Authenticode signatures, then
-publish the signed update artifacts and manifest atomically. Do not publish an
+updater endpoint and public key. The release script signs and verifies both
+staged engine copies *before* Tauri bundles them, then signs/verifies the desktop
+executable and MSI/NSIS output. It discovers the x64 `signtool.exe` from a
+Windows SDK installation when it is not on `PATH`.
+
+Publish the signed update artifacts and manifest atomically. Do not publish an
 update manifest before every referenced signed artifact is available.
+
+## GitHub Releases automation
+
+`.github/workflows/release-windows.yml` publishes a release only for a version
+tag matching `desktop/src-tauri/Cargo.toml` (for example `v0.1.0`), or when
+manually dispatched. It uploads the signed MSI/NSIS artifacts and their Tauri
+signatures before publishing `latest.json`. The default endpoint is:
+
+`https://github.com/jokerD888/VeritasSyncNext/releases/latest/download/latest.json`
+
+Configure these repository Actions secrets before triggering it:
+
+- `WINDOWS_CERTIFICATE_PFX_BASE64` and `WINDOWS_CERTIFICATE_PASSWORD` from a
+  trusted code-signing certificate;
+- `TAURI_SIGNING_PRIVATE_KEY` (the contents of the protected private key) and
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`;
+- `VERITASSYNC_UPDATER_PUBKEY` (the matching public-key string).
