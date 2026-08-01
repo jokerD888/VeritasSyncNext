@@ -15,7 +15,7 @@
 
 namespace {
 void Usage() {
-  std::cout << "Usage: veritassync-engine --headless --db <path> [--init-task <id> --mode <one_way|bidirectional> --role <source|target|peer> --root <path>] [--scan-task <id> --device-id <id>]\n"
+  std::cout << "Usage: veritassync-engine --headless --db <path> [--init-task <id> --mode <one_way|bidirectional> --role <source|target|peer> --root <path>] [--scan-task <id> --device-id <id>] [--list-conflicts <task-id>] [--resolve-conflict <conflict-id>]\n"
                "       veritassync-engine --headless --mock-one-way --mock-source-root <path> --mock-target-root <path> --mock-source-db <path> --mock-target-db <path> [--mock-task-id <id>]\n";
 }
 
@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
   try {
     bool headless = false;
     std::string db_path;
-    std::string init_task_id, scan_task_id, device_id, mode, role, root;
+    std::string init_task_id, scan_task_id, list_conflicts_task_id, resolve_conflict_id, device_id, mode, role, root;
     bool mock_one_way = false;
     std::string mock_source_root, mock_target_root, mock_source_db, mock_target_db, mock_task_id = "phase2-mock";
     for (int i = 1; i < argc; ++i) {
@@ -109,6 +109,8 @@ int main(int argc, char** argv) {
       if (argument == "--db") db_path = value;
       else if (argument == "--init-task") init_task_id = value;
       else if (argument == "--scan-task") scan_task_id = value;
+      else if (argument == "--list-conflicts") list_conflicts_task_id = value;
+      else if (argument == "--resolve-conflict") resolve_conflict_id = value;
       else if (argument == "--device-id") device_id = value;
       else if (argument == "--mode") mode = value;
       else if (argument == "--role") role = value;
@@ -152,8 +154,19 @@ int main(int argc, char** argv) {
       const auto result = reconciler.Apply(database, snapshot, {scan_task_id, device_id, 0, now});
       std::cout << "Scanned " << snapshot.size() << " entries; " << result.created_or_changed
                 << " created or changed, " << result.tombstoned << " tombstoned\n";
-    } else {
-      if (init_task_id.empty()) std::cout << "VeritasSyncNext headless engine ready; schema v" << database.SchemaVersion() << "\n";
+    }
+    if (!list_conflicts_task_id.empty()) {
+      for (const auto& conflict : database.ListConflicts(list_conflicts_task_id)) {
+        std::cout << conflict.conflict_id << "\t" << conflict.state << "\t" << conflict.original_path
+                  << "\t" << conflict.conflict_path << "\t" << conflict.winning_version_id << "\n";
+      }
+    }
+    if (!resolve_conflict_id.empty()) {
+      database.UpdateConflictState(resolve_conflict_id, "resolved");
+      std::cout << "Resolved conflict " << resolve_conflict_id << "\n";
+    }
+    if (init_task_id.empty() && scan_task_id.empty() && list_conflicts_task_id.empty() && resolve_conflict_id.empty()) {
+      std::cout << "VeritasSyncNext headless engine ready; schema v" << database.SchemaVersion() << "\n";
     }
     return 0;
   } catch (const std::exception& error) { std::cerr << "error: " << error.what() << "\n"; return 1; }

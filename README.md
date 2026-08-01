@@ -36,6 +36,14 @@ reconciles durable file records. The database path must stay outside the task ro
 so its WAL and temporary files can never be synchronized. See
 [`protocol/PROTOCOL_V1.md`](protocol/PROTOCOL_V1.md) for the wire contract.
 
+For a bidirectional task, inspect the engine-owned conflict list and mark a
+manually reviewed entry resolved with:
+
+```powershell
+./build/default/veritassync-engine --headless --db state.db --list-conflicts demo
+./build/default/veritassync-engine --headless --db state.db --resolve-conflict <conflict-id>
+```
+
 See [`docs/PHASE3_DEVELOPMENT.md`](docs/PHASE3_DEVELOPMENT.md) for the multi-target
 source ownership, slow-peer isolation, and one-way target policy.
 See [`docs/PHASE4_DEVELOPMENT.md`](docs/PHASE4_DEVELOPMENT.md) for two-peer version

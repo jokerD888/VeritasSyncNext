@@ -95,6 +95,7 @@ class Database {
                                                    std::uint64_t observed_remote_clock = 0);
   void RecordConflict(const ConflictRecord& conflict);
   [[nodiscard]] std::vector<ConflictRecord> ListConflicts(const std::string& task_id) const;
+  void UpdateConflictState(const std::string& conflict_id, const std::string& state);
   void InTransaction(const std::function<void()>& operation);
   void CreateTransfer(const TransferRecord& transfer);
   void MarkTransferChunkCompleted(const TransferId& transfer_id, std::uint64_t chunk_index,

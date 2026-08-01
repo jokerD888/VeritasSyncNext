@@ -46,6 +46,9 @@ VSYNC_TEST(DatabasePersistsVersionLineageLamportClockAndConflicts) {
     const auto conflicts = database.ListConflicts("task-1");
     VSYNC_CHECK(conflicts.size() == 1);
     VSYNC_CHECK(conflicts[0].conflict_path == "notes.conflict.device-b.8.txt");
+    database.UpdateConflictState("conflict-1", "resolved");
+    VSYNC_CHECK(database.ListConflicts("task-1")[0].state == "resolved");
+    VSYNC_CHECK_THROWS(database.UpdateConflictState("missing", "resolved"));
   }
   std::filesystem::remove(path);
   std::filesystem::remove(path.string() + "-shm");

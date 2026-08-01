@@ -445,6 +445,23 @@ std::vector<ConflictRecord> Database::ListConflicts(const std::string& task_id) 
     return result;
   } catch (...) { cleanup(); throw; }
 }
+
+void Database::UpdateConflictState(const std::string& conflict_id, const std::string& state) {
+  if (conflict_id.empty() || (state != "unresolved" && state != "resolved")) {
+    throw std::invalid_argument("conflict state update is invalid");
+  }
+  constexpr const char* sql = "UPDATE conflicts SET state=? WHERE conflict_id=?;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare conflict state update");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, state.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind conflict state");
+    Check(sqlite3_bind_text(statement, 2, conflict_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind conflict id");
+    Check(sqlite3_step(statement), connection_, "update conflict state");
+    if (sqlite3_changes(connection_) != 1) throw std::invalid_argument("conflict does not exist");
+    cleanup();
+  } catch (...) { cleanup(); throw; }
+}
 void Database::InTransaction(const std::function<void()>& operation) {
   Execute("BEGIN IMMEDIATE;");
   try { operation(); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }

@@ -57,6 +57,15 @@ different offline edits, destroys both sessions without delivering queued frames
 then constructs a fresh mock connection. It verifies final convergence and the
 same conflict filename on both peers.
 
+## Human conflict workflow
+
+The engine keeps conflicts queryable before a desktop UI exists. Use
+`--list-conflicts <task-id>` to list conflict ID, state, formal path, preserved
+copy, and winning version. After reviewing the files and making any desired
+manual edit, use `--resolve-conflict <conflict-id>` to mark the durable conflict
+row resolved. This changes only the conflict's workflow state; it never deletes
+either the formal file or the preserved conflict copy.
+
 Run all checks with:
 
 ```powershell
