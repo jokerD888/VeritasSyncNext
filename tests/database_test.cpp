@@ -10,7 +10,7 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.ApplyMigrations();
-    VSYNC_CHECK(database.SchemaVersion() == 3);
+    VSYNC_CHECK(database.SchemaVersion() == 4);
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
     const auto task = database.FindTask("task-1");
     VSYNC_CHECK(task.has_value());
@@ -20,6 +20,31 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     VSYNC_CHECK_THROWS(database.CreateTask({"invalid-two-way", "bidirectional", "source", "C:/sync"}));
     VSYNC_CHECK(database.CountRows("tasks") == 1);
     VSYNC_CHECK(database.CountRows("file_records") == 0);
+  }
+  std::filesystem::remove(path);
+  std::filesystem::remove(path.string() + "-shm");
+  std::filesystem::remove(path.string() + "-wal");
+}
+
+VSYNC_TEST(DatabaseListsDeletesTasksAndPersistsEngineEvents) {
+  const auto path = std::filesystem::temp_directory_path() / ("veritassync-events-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  {
+    veritassync::storage::Database database(path);
+    database.ApplyMigrations();
+    database.CreateTask({"task-a", "one_way", "source", "C:/a"});
+    database.CreateTask({"task-b", "bidirectional", "peer", "C:/b"});
+    VSYNC_CHECK(database.ListTasks().size() == 2);
+    database.RecordEngineEvent({0, std::optional<std::string>{"task-a"}, "info", "task created", 100});
+    database.RecordEngineEvent({0, std::nullopt, "warning", "engine restarted", 101});
+    const auto events = database.ListEngineEvents();
+    VSYNC_CHECK(events.size() == 2);
+    VSYNC_CHECK(events[0].message == "engine restarted");
+    database.DeleteTask("task-a");
+    VSYNC_CHECK(!database.FindTask("task-a").has_value());
+    VSYNC_CHECK(database.ListTasks().size() == 1);
+    VSYNC_CHECK(database.ListEngineEvents().size() == 2);
+    VSYNC_CHECK(!database.ListEngineEvents()[1].task_id.has_value());
+    VSYNC_CHECK_THROWS(database.DeleteTask("task-a"));
   }
   std::filesystem::remove(path);
   std::filesystem::remove(path.string() + "-shm");

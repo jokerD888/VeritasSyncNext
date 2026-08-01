@@ -2,6 +2,8 @@
 #include "engine/storage/ignore_rules.h"
 #include "engine/storage/manifest_scanner.h"
 #include "engine/common/uuid.h"
+#include "engine/ipc/ipc_service.h"
+#include "engine/ipc/named_pipe_server.h"
 #include "engine/sync/snapshot_reconciler.h"
 #include "engine/sync/task_policy.h"
 #include "engine/sync/one_way_sync.h"
@@ -16,6 +18,7 @@
 namespace {
 void Usage() {
   std::cout << "Usage: veritassync-engine --headless --db <path> [--init-task <id> --mode <one_way|bidirectional> --role <source|target|peer> --root <path>] [--scan-task <id> --device-id <id>] [--list-conflicts <task-id>] [--resolve-conflict <conflict-id>]\n"
+               "       veritassync-engine --ipc-serve --db <path> --pipe <\\\\.\\pipe\\name>\n"
                "       veritassync-engine --headless --mock-one-way --mock-source-root <path> --mock-target-root <path> --mock-source-db <path> --mock-target-db <path> [--mock-task-id <id>]\n";
 }
 
@@ -94,8 +97,8 @@ void RunMockOneWay(const std::string& task_id, const std::filesystem::path& sour
 }
 int main(int argc, char** argv) {
   try {
-    bool headless = false;
-    std::string db_path;
+    bool headless = false, ipc_serve = false;
+    std::string db_path, pipe_name;
     std::string init_task_id, scan_task_id, list_conflicts_task_id, resolve_conflict_id, device_id, mode, role, root;
     bool mock_one_way = false;
     std::string mock_source_root, mock_target_root, mock_source_db, mock_target_db, mock_task_id = "phase2-mock";
@@ -103,10 +106,12 @@ int main(int argc, char** argv) {
       const std::string argument = argv[i];
       if (argument == "--help") { Usage(); return 0; }
       if (argument == "--headless") { headless = true; continue; }
+      if (argument == "--ipc-serve") { ipc_serve = true; continue; }
       if (argument == "--mock-one-way") { mock_one_way = true; continue; }
       if (i + 1 >= argc) throw std::invalid_argument("missing value for " + argument);
       const std::string value = argv[++i];
       if (argument == "--db") db_path = value;
+      else if (argument == "--pipe") pipe_name = value;
       else if (argument == "--init-task") init_task_id = value;
       else if (argument == "--scan-task") scan_task_id = value;
       else if (argument == "--list-conflicts") list_conflicts_task_id = value;
@@ -121,6 +126,14 @@ int main(int argc, char** argv) {
       else if (argument == "--mock-target-db") mock_target_db = value;
       else if (argument == "--mock-task-id") mock_task_id = value;
       else throw std::invalid_argument("unknown option: " + argument);
+    }
+    if (ipc_serve) {
+      if (db_path.empty() || pipe_name.empty()) throw std::invalid_argument("--ipc-serve requires --db and --pipe");
+      veritassync::storage::Database database(db_path);
+      database.ApplyMigrations();
+      database.RecordEngineEvent({0, std::nullopt, "info", "IPC server started", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()});
+      veritassync::ipc::IpcService service(database);
+      return veritassync::ipc::RunNamedPipeServer(service, pipe_name);
     }
     if (!headless) { Usage(); return 2; }
     if (mock_one_way) {

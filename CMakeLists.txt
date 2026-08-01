@@ -37,6 +37,8 @@ add_library(veritassync_engine
   engine/storage/ignore_rules.cpp
   engine/storage/manifest_scanner.cpp
   engine/storage/safe_file_writer.cpp
+  engine/ipc/ipc_service.cpp
+  engine/ipc/named_pipe_server.cpp
   engine/transport/mock_transport.cpp
   engine/transport/connection_state.cpp
   engine/transport/send_scheduler.cpp
@@ -108,6 +110,7 @@ if(BUILD_TESTING)
     tests/content_hash_test.cpp
     tests/uuid_test.cpp
     tests/database_test.cpp
+    tests/ipc_service_test.cpp
     tests/ignore_rules_test.cpp
     tests/manifest_scanner_test.cpp
     tests/manifest_diff_test.cpp

@@ -65,6 +65,14 @@ struct ConflictRecord {
   std::int64_t created_at_ms = 0;
 };
 
+struct EngineEvent {
+  std::int64_t event_id = 0;
+  std::optional<std::string> task_id;
+  std::string level;
+  std::string message;
+  std::int64_t created_at_ms = 0;
+};
+
 class Database {
  public:
   explicit Database(const std::filesystem::path& path);
@@ -75,6 +83,8 @@ class Database {
   void ApplyMigrations();
   void CreateTask(const TaskDefinition& task);
   [[nodiscard]] std::optional<TaskDefinition> FindTask(const std::string& task_id) const;
+  [[nodiscard]] std::vector<TaskDefinition> ListTasks() const;
+  void DeleteTask(const std::string& task_id);
   void UpsertFileRecord(const FileRecord& record);
   void RecordTombstone(std::string task_id, std::string relative_path,
                        std::string version_id, std::string origin_device_id,
@@ -96,6 +106,8 @@ class Database {
   void RecordConflict(const ConflictRecord& conflict);
   [[nodiscard]] std::vector<ConflictRecord> ListConflicts(const std::string& task_id) const;
   void UpdateConflictState(const std::string& conflict_id, const std::string& state);
+  void RecordEngineEvent(const EngineEvent& event);
+  [[nodiscard]] std::vector<EngineEvent> ListEngineEvents(std::size_t limit = 200) const;
   void InTransaction(const std::function<void()>& operation);
   void CreateTransfer(const TransferRecord& transfer);
   void MarkTransferChunkCompleted(const TransferId& transfer_id, std::uint64_t chunk_index,
