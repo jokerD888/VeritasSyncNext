@@ -10,7 +10,17 @@ const INVALID_HANDLE_VALUE: Handle = -1isize;
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 const OPEN_EXISTING: u32 = 3;
+const ERROR_FILE_NOT_FOUND: u32 = 2;
 const ERROR_PIPE_BUSY: u32 = 231;
+const ERROR_PIPE_NOT_CONNECTED: u32 = 233;
+const MAX_CONNECT_ATTEMPTS: usize = 24;
+
+fn is_transient_connect_error(error: u32) -> bool {
+    matches!(
+        error,
+        ERROR_FILE_NOT_FOUND | ERROR_PIPE_BUSY | ERROR_PIPE_NOT_CONNECTED
+    )
+}
 
 #[link(name = "kernel32")]
 extern "system" {
@@ -60,13 +70,12 @@ pub fn request(pipe: &str, command: &str, args: &[String]) -> Result<String, Str
         message.push_str(&escape(argument));
     }
     let wide: Vec<u16> = OsStr::new(pipe).encode_wide().chain(Some(0)).collect();
-    // The Engine processes one message per pipe instance. Several UI reads may
-    // arrive together, so a busy pipe means "healthy but serving another
-    // request", not "engine unavailable". Wait briefly before declaring it
-    // unavailable; this also prevents the shell from spawning duplicate
-    // sidecars during normal dashboard refreshes.
+    // The Engine processes one message per pipe instance. Between accepting
+    // clients it briefly destroys and recreates that instance, so concurrent
+    // dashboard reads can observe FILE_NOT_FOUND as well as PIPE_BUSY. Both
+    // mean "the healthy Engine is rotating its IPC endpoint", not unavailable.
     let mut handle = INVALID_HANDLE_VALUE;
-    for _ in 0..12 {
+    for attempt in 0..MAX_CONNECT_ATTEMPTS {
         handle = unsafe {
             CreateFileW(
                 wide.as_ptr(),
@@ -81,11 +90,15 @@ pub fn request(pipe: &str, command: &str, args: &[String]) -> Result<String, Str
         if handle != INVALID_HANDLE_VALUE {
             break;
         }
-        if unsafe { GetLastError() } != ERROR_PIPE_BUSY {
+        let error = unsafe { GetLastError() };
+        if !is_transient_connect_error(error) || attempt + 1 == MAX_CONNECT_ATTEMPTS {
             break;
         }
-        let _ = unsafe { WaitNamedPipeW(wide.as_ptr(), 200) };
-        thread::sleep(Duration::from_millis(10));
+        if error == ERROR_PIPE_BUSY {
+            let _ = unsafe { WaitNamedPipeW(wide.as_ptr(), 125) };
+        } else {
+            thread::sleep(Duration::from_millis(25));
+        }
     }
     if handle == INVALID_HANDLE_VALUE {
         return Err("IPC engine is unavailable".to_string());
@@ -126,4 +139,17 @@ pub fn request(pipe: &str, command: &str, args: &[String]) -> Result<String, Str
         CloseHandle(handle);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retries_when_the_single_instance_server_rotates() {
+        assert!(is_transient_connect_error(ERROR_FILE_NOT_FOUND));
+        assert!(is_transient_connect_error(ERROR_PIPE_BUSY));
+        assert!(is_transient_connect_error(ERROR_PIPE_NOT_CONNECTED));
+        assert!(!is_transient_connect_error(5)); // ERROR_ACCESS_DENIED
+    }
 }
