@@ -113,13 +113,6 @@ fn ipc_request(app: AppHandle, command: String, args: Vec<String>) -> Result<Str
     }
 }
 
-#[tauri::command]
-fn select_folder() -> Option<String> {
-    rfd::FileDialog::new()
-        .pick_folder()
-        .map(|path| path.to_string_lossy().to_string())
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AvailableUpdate {
@@ -160,8 +153,21 @@ async fn install_update(app: AppHandle) -> Result<String, String> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            log::info!("VeritasSync desktop shell starting");
             let show = MenuItem::with_id(app, "show", "显示 VeritasSync", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出桌面壳", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -190,7 +196,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ensure_engine,
             ipc_request,
-            select_folder,
             check_for_update,
             install_update
         ])

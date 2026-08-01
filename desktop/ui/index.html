@@ -3,51 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4f7fb" />
     <title>VeritasSync Next</title>
-    <link rel="stylesheet" href="./app.css" />
   </head>
   <body>
-    <div class="grain" aria-hidden="true"></div>
-    <main class="shell">
-      <aside class="rail" aria-label="主要导航">
-        <div class="brand"><span class="brand-mark">V</span><span>VERITAS<br /><i>SYNC</i></span></div>
-        <nav>
-          <button class="nav-item active" data-view="overview"><span>01</span>总览</button>
-          <button class="nav-item" data-view="tasks"><span>02</span>任务</button>
-          <button class="nav-item" data-view="conflicts"><span>03</span>冲突 <b id="conflict-count">0</b></button>
-          <button class="nav-item" data-view="events"><span>04</span>事件</button>
-        </nav>
-        <div class="rail-footer"><span class="pulse"></span><span id="engine-label">连接引擎中</span><small>IPC / v1</small></div>
-      </aside>
-      <section class="workspace">
-        <header class="topbar">
-          <div><p class="eyebrow" id="date-line">SYNCHRONIZATION CONTROL</p><h1 id="view-title">同步概览</h1></div>
-          <div class="top-actions"><button class="text-button" id="check-updates">检查更新</button><button class="icon-button" id="refresh" title="刷新状态">↻</button><button class="primary" id="open-wizard">+ 新建任务</button></div>
-        </header>
-        <section class="metrics" id="overview-view">
-          <article class="metric"><p>ENGINE</p><strong id="engine-state">检查中</strong><small>本机独立进程</small></article>
-          <article class="metric"><p>任务</p><strong id="task-count">0</strong><small>活动配置</small></article>
-          <article class="metric"><p>待处理冲突</p><strong id="open-conflicts">0</strong><small>需要人工确认</small></article>
-          <article class="metric accent"><p>协议</p><strong id="schema-version">—</strong><small>SQLite schema</small></article>
-        </section>
-        <section class="content-grid" id="content">
-          <article class="panel task-panel"><div class="panel-head"><div><p class="eyebrow">TASKS</p><h2>同步任务</h2></div><button class="text-button" data-view="tasks">查看全部 →</button></div><div id="task-list" class="task-list"></div></article>
-          <article class="panel event-panel"><div class="panel-head"><div><p class="eyebrow">LIVE LOG</p><h2>引擎事件</h2></div><span class="live-dot">LIVE</span></div><div id="event-list" class="event-list"></div></article>
-        </section>
-      </section>
-    </main>
-    <dialog id="task-dialog">
-      <form method="dialog" id="task-form">
-        <div class="dialog-head"><div><p class="eyebrow">NEW CONNECTION</p><h2>创建同步任务</h2></div><button class="close" value="cancel" aria-label="关闭">×</button></div>
-        <label>任务名称<input required name="id" pattern="[A-Za-z0-9_-]+" placeholder="例如 office-archive" /></label>
-        <div class="field-grid"><label>同步模式<select name="mode" id="mode"><option value="one_way">单权威源</option><option value="bidirectional">两节点双向</option></select></label><label>本机角色<select name="role" id="role"><option value="source">Source</option><option value="target">Target</option></select></label></div>
-        <label>同步目录<div class="path-input"><input required name="root" placeholder="选择一个本机目录" /><button type="button" id="choose-folder">选择</button></div></label>
-        <p class="hint">双向模式会自动切换为 Peer。数据库必须保存在同步目录之外。</p>
-        <div class="dialog-actions"><button value="cancel" class="secondary">取消</button><button class="primary" value="default">创建任务</button></div>
-      </form>
-    </dialog>
-    <template id="empty-state"><div class="empty"><span>◇</span><p>这里还没有内容</p></div></template>
-    <div id="toast" role="status" aria-live="polite"></div>
-    <script src="./app.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

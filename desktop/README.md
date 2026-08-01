@@ -9,17 +9,42 @@ an already-running engine.
 ## Development prerequisites
 
 - Rust stable plus the MSVC build tools (`cargo` must be on `PATH`)
-- Node.js is only needed for optional linting; the included UI is plain static
-  HTML/CSS/JavaScript and has no npm dependency
+- Node.js 20+ and `pnpm` for the React + TypeScript + Vite workspace
 - Build the C++ engine first with `cmake --build --preset default`
 
 Stage the engine sidecar and run Tauri:
 
 ```powershell
 ./scripts/stage-desktop-engine.ps1
-cd desktop/src-tauri
+cd desktop/ui
+pnpm install
+pnpm lint
+pnpm test
+cd ../src-tauri
 cargo tauri dev
 ```
+
+The Tauri development command starts Vite automatically at `127.0.0.1:1420`.
+For a production frontend artifact, run `pnpm build` in `desktop/ui`; Tauri
+does this automatically before a package build.
+
+## Desktop integration
+
+The React UI uses Radix primitives, shadcn-style local components, and Lucide
+icons. It retains the existing Rust IPC bridge and the independent C++ engine:
+the UI never reads the SQLite database or sync roots directly.
+
+- `window-state` restores the main window's size, position, and maximized state.
+- `single-instance` focuses the existing main window on a second launch.
+- `dialog` supplies the native folder picker used by task creation.
+- `notification` delivers optional Windows notifications for completed scans,
+  created tasks, and engine availability failures.
+- `store` persists desktop-only preferences such as the notification toggle.
+- `log` writes desktop-shell and frontend diagnostics outside the sync database.
+
+The window uses the Windows 11 Mica backdrop only at the shell level. Content
+panels are deliberately opaque and high contrast, so sync data remains readable
+and the visual effect does not obscure operational state.
 
 Release packaging, Windows signing, and updater publication are described in
 [`deploy/windows/README.md`](../deploy/windows/README.md). They require the
