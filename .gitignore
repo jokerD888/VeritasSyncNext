@@ -1,7 +1,11 @@
 /build/
 /desktop/src-tauri/binaries/
-/desktop/src-tauri/resources/engine/*.exe
+/desktop/src-tauri/resources/engine/*
 /desktop/src-tauri/tauri.release.generated.json
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
+/desktop/src-tauri/icons/*
+!/desktop/src-tauri/icons/icon.ico
 /out/
 /.vs/
 *.db

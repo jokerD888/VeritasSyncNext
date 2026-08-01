@@ -16,5 +16,10 @@ $resourceDirectory = Join-Path $PSScriptRoot "..\desktop\src-tauri\resources\eng
 New-Item -ItemType Directory -Force -Path $resourceDirectory | Out-Null
 $resourceEngine = Join-Path $resourceDirectory "veritassync-engine.exe"
 Copy-Item -LiteralPath $engine -Destination $resourceEngine -Force
+$runtimeLibraries = Get-ChildItem -LiteralPath $BuildDirectory -Filter "*.dll" -File
+foreach ($library in $runtimeLibraries) {
+  Copy-Item -LiteralPath $library.FullName -Destination (Join-Path $resourceDirectory $library.Name) -Force
+}
 Write-Host "Staged engine sidecar: $destination"
 Write-Host "Staged engine runtime resource: $resourceEngine"
+Write-Host "Staged $($runtimeLibraries.Count) engine runtime DLL(s) into: $resourceDirectory"

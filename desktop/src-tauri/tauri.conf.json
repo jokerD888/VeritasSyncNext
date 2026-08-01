@@ -9,11 +9,15 @@
     "windows": [{ "title": "VeritasSync Next", "width": 1180, "height": 760, "minWidth": 900, "minHeight": 620, "resizable": true }],
     "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:;" }
   },
+  "plugins": {
+    "updater": { "endpoints": [], "pubkey": "" }
+  },
   "bundle": {
     "active": true,
+    "icon": ["icons/icon.ico"],
     "targets": ["msi", "nsis"],
     "externalBin": ["binaries/veritassync-engine"],
-    "resources": ["resources"],
+    "resources": ["resources/engine"],
     "windows": { "wix": { "language": ["zh-CN"] } }
   }
 }

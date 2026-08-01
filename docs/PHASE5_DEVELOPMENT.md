@@ -47,8 +47,9 @@ events with their task reference cleared.
 
 ## Packaging, signing, and updates
 
-`scripts/stage-desktop-engine.ps1` stages the C++ executable as both Tauri
-external binary and runtime resource. `deploy/windows/build-release.ps1` first
+`scripts/stage-desktop-engine.ps1` stages the C++ executable and its adjacent
+runtime DLLs as a Tauri runtime resource; the full resource directory is the
+sidecar's preferred launch location. `deploy/windows/build-release.ps1` first
 builds/tests the engine, generates an updater config only from CI environment
 secrets, stages the sidecar, invokes `cargo tauri build`, and Authenticode-signs
 and verifies the engine plus MSI/NSIS artifacts.
@@ -64,7 +65,10 @@ for the required CI secrets and publication ordering.
 - A Windows named-pipe smoke test starts `--ipc-serve`, receives `ping`, and
   performs a controlled `shutdown`.
 - Node validates the static UI JavaScript syntax.
-- Tauri compilation and MSI/NSIS creation require the Rust toolchain. This
-  workstation currently has Node.js but no `cargo`/`rustc`, so those artifacts
-  must be verified after Rust installation. Trusted signing and a live updater
-  publish additionally require the release-owner credentials and HTTPS endpoint.
+- Rust stable MSVC (`rustc/cargo 1.97.1`) builds the desktop shell with
+  `cargo check`; Tauri creates both MSI and NSIS release bundles.
+- A desktop smoke test verifies sidecar startup from the packaged resource
+  directory, `VSYNC_IPC/1` ping, and watchdog recovery after the engine is
+  forcibly terminated.
+- Trusted signing and a live updater publish additionally require the
+  release-owner credentials and HTTPS endpoint.
