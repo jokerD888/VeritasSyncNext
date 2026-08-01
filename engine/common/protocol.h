@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -17,9 +18,11 @@ inline constexpr std::size_t kLogicalChunkSize = 256U * 1024U;
 enum class Channel { kControl, kBulk };
 enum class FrameType : std::uint8_t {
   kHello = 1, kManifest = 2, kError = 3, kHeartbeat = 4, kFileRequest = 5, kCancel = 6,
+  kVersionManifest = 7,
   kChunk = 64, kChunkAck = 65, kWindowUpdate = 66,
 };
 enum class Role : std::uint8_t { kSource = 1, kTarget = 2, kPeer = 3 };
+enum class VersionedEntryKind : std::uint8_t { kFile = 1, kDirectory = 2, kTombstone = 3 };
 
 struct Frame {
   FrameType type;
@@ -36,6 +39,18 @@ struct Hello {
 };
 struct ManifestEntry { std::string relative_path; std::uint64_t size; std::string content_hash; };
 struct Manifest { std::uint64_t revision; std::vector<ManifestEntry> entries; };
+struct VersionedManifestEntry {
+  std::string relative_path;
+  VersionedEntryKind kind;
+  std::uint64_t size;
+  std::string content_hash;
+  std::string version_id;
+  std::string origin_device_id;
+  std::uint64_t logical_clock;
+  std::string parent_version_id;
+  std::optional<std::uint64_t> deleted_at_ms;
+};
+struct VersionedManifest { std::uint64_t revision; std::vector<VersionedManifestEntry> entries; };
 struct Chunk {
   std::array<std::uint8_t, 16> transfer_id;
   std::array<std::uint8_t, 32> file_hash;
@@ -54,6 +69,8 @@ struct Cancel { std::array<std::uint8_t, 16> transfer_id; std::string reason; };
 [[nodiscard]] Hello DecodeHello(std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> EncodeManifest(const Manifest& manifest);
 [[nodiscard]] Manifest DecodeManifest(std::span<const std::uint8_t> payload);
+[[nodiscard]] std::vector<std::uint8_t> EncodeVersionedManifest(const VersionedManifest& manifest);
+[[nodiscard]] VersionedManifest DecodeVersionedManifest(std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> EncodeChunk(const Chunk& chunk);
 [[nodiscard]] Chunk DecodeChunk(std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> EncodeFileRequest(const FileRequest& request);

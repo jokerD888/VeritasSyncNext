@@ -43,3 +43,23 @@ VSYNC_TEST(ProtocolRoundTripsTransferCancellation) {
   VSYNC_CHECK(decoded.transfer_id == cancel.transfer_id); VSYNC_CHECK(decoded.reason == "source_changed");
   VSYNC_CHECK_THROWS(veritassync::protocol::EncodeCancel({{}, ""}));
 }
+
+VSYNC_TEST(ProtocolRoundTripsVersionedManifestAndRejectsInvalidTombstone) {
+  using namespace veritassync::protocol;
+  const VersionedManifest expected{9, {
+      {"folder", VersionedEntryKind::kDirectory, 0, {}, "dir-v1", "device-a", 2, "", std::nullopt},
+      {"folder/notes.txt", VersionedEntryKind::kFile, 3, "abcd", "file-v2", "device-b", 7,
+       "file-v1", std::nullopt},
+      {"deleted.txt", VersionedEntryKind::kTombstone, 0, {}, "delete-v3", "device-a", 8,
+       "file-v2", std::optional<std::uint64_t>{1234}},
+  }};
+  const auto frame = DecodeFrame(EncodeFrame({FrameType::kVersionManifest, 4,
+                                               EncodeVersionedManifest(expected)}));
+  const auto actual = DecodeVersionedManifest(frame.payload);
+  VSYNC_CHECK(frame.type == FrameType::kVersionManifest);
+  VSYNC_CHECK(IsAllowedOn(Channel::kControl, frame.type));
+  VSYNC_CHECK(actual.revision == 9);
+  VSYNC_CHECK(actual.entries[1].parent_version_id == "file-v1");
+  VSYNC_CHECK(actual.entries[2].deleted_at_ms == std::optional<std::uint64_t>{1234});
+  VSYNC_CHECK_THROWS(EncodeVersionedManifest({1, {{"gone", VersionedEntryKind::kTombstone, 0, {}, "v", "d", 1, "", std::nullopt}}}));
+}

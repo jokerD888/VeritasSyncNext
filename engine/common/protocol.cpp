@@ -39,7 +39,7 @@ class Reader {
   void Need(std::size_t count) const { if (count > bytes_.size() - position_) throw std::invalid_argument("truncated payload"); }
   std::span<const std::uint8_t> bytes_; std::size_t position_ = 0;
 };
-bool ValidType(std::uint8_t type) { return type == 1 || type == 2 || type == 3 || type == 4 || type == 5 || type == 6 || type == 64 || type == 65 || type == 66; }
+bool ValidType(std::uint8_t type) { return type == 1 || type == 2 || type == 3 || type == 4 || type == 5 || type == 6 || type == 7 || type == 64 || type == 65 || type == 66; }
 }
 
 bool IsAllowedOn(Channel channel, FrameType type) { return channel == Channel::kControl ? static_cast<std::uint8_t>(type) < 64 : static_cast<std::uint8_t>(type) >= 64; }
@@ -55,6 +55,59 @@ std::vector<std::uint8_t> EncodeHello(const Hello& hello) { Writer writer; write
 Hello DecodeHello(std::span<const std::uint8_t> payload) { Reader reader(payload); Hello hello{reader.String(), static_cast<Role>(reader.U8()), reader.String(), reader.String(), reader.String()}; if (hello.task_id.empty() || hello.device_id.empty() || hello.authorization_digest.empty() || (hello.role != Role::kSource && hello.role != Role::kTarget && hello.role != Role::kPeer)) throw std::invalid_argument("invalid hello"); reader.Finish(); return hello; }
 std::vector<std::uint8_t> EncodeManifest(const Manifest& manifest) { if (manifest.entries.size() > 1000000U) throw std::invalid_argument("too many manifest entries"); Writer writer; writer.U64(manifest.revision); writer.U32(static_cast<std::uint32_t>(manifest.entries.size())); for (const auto& e : manifest.entries) { writer.String(e.relative_path); writer.U64(e.size); writer.String(e.content_hash); } return writer.Take(); }
 Manifest DecodeManifest(std::span<const std::uint8_t> payload) { Reader reader(payload); Manifest manifest{reader.U64(), {}}; const auto count = reader.U32(); if (count > 1000000U) throw std::invalid_argument("too many manifest entries"); manifest.entries.reserve(count); for (std::uint32_t i = 0; i < count; ++i) { auto path = reader.String(); auto size = reader.U64(); auto hash = reader.String(); if (path.empty()) throw std::invalid_argument("empty manifest path"); manifest.entries.push_back({std::move(path), size, std::move(hash)}); } reader.Finish(); return manifest; }
+std::vector<std::uint8_t> EncodeVersionedManifest(const VersionedManifest& manifest) {
+  if (manifest.entries.size() > 1000000U) throw std::invalid_argument("too many versioned manifest entries");
+  Writer writer;
+  writer.U64(manifest.revision);
+  writer.U32(static_cast<std::uint32_t>(manifest.entries.size()));
+  for (const auto& entry : manifest.entries) {
+    const bool file = entry.kind == VersionedEntryKind::kFile;
+    const bool tombstone = entry.kind == VersionedEntryKind::kTombstone;
+    if (entry.relative_path.empty() || entry.version_id.empty() || entry.origin_device_id.empty() ||
+        (entry.kind != VersionedEntryKind::kFile && entry.kind != VersionedEntryKind::kDirectory && !tombstone) ||
+        (file && entry.content_hash.empty()) || (!file && !entry.content_hash.empty()) ||
+        (!file && entry.size != 0) || (tombstone != entry.deleted_at_ms.has_value())) {
+      throw std::invalid_argument("invalid versioned manifest entry");
+    }
+    writer.String(entry.relative_path);
+    writer.U8(static_cast<std::uint8_t>(entry.kind));
+    writer.U64(entry.size);
+    writer.String(entry.content_hash);
+    writer.String(entry.version_id);
+    writer.String(entry.origin_device_id);
+    writer.U64(entry.logical_clock);
+    writer.String(entry.parent_version_id);
+    writer.U8(entry.deleted_at_ms.has_value() ? 1 : 0);
+    if (entry.deleted_at_ms.has_value()) writer.U64(*entry.deleted_at_ms);
+  }
+  return writer.Take();
+}
+VersionedManifest DecodeVersionedManifest(std::span<const std::uint8_t> payload) {
+  Reader reader(payload);
+  VersionedManifest manifest{reader.U64(), {}};
+  const auto count = reader.U32();
+  if (count > 1000000U) throw std::invalid_argument("too many versioned manifest entries");
+  manifest.entries.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    VersionedManifestEntry entry{reader.String(), static_cast<VersionedEntryKind>(reader.U8()), reader.U64(),
+                                 reader.String(), reader.String(), reader.String(), reader.U64(),
+                                 reader.String(), std::nullopt};
+    const auto has_deleted_at = reader.U8();
+    if (has_deleted_at > 1) throw std::invalid_argument("invalid tombstone timestamp flag");
+    if (has_deleted_at == 1) entry.deleted_at_ms = reader.U64();
+    const bool file = entry.kind == VersionedEntryKind::kFile;
+    const bool tombstone = entry.kind == VersionedEntryKind::kTombstone;
+    if (entry.relative_path.empty() || entry.version_id.empty() || entry.origin_device_id.empty() ||
+        (entry.kind != VersionedEntryKind::kFile && entry.kind != VersionedEntryKind::kDirectory && !tombstone) ||
+        (file && entry.content_hash.empty()) || (!file && !entry.content_hash.empty()) ||
+        (!file && entry.size != 0) || (tombstone != entry.deleted_at_ms.has_value())) {
+      throw std::invalid_argument("invalid versioned manifest entry");
+    }
+    manifest.entries.push_back(std::move(entry));
+  }
+  reader.Finish();
+  return manifest;
+}
 std::vector<std::uint8_t> EncodeChunk(const Chunk& chunk) { if (chunk.bytes.size() > kLogicalChunkSize) throw std::invalid_argument("chunk exceeds logical chunk size"); Writer writer; writer.Bytes(chunk.transfer_id); writer.Bytes(chunk.file_hash); writer.U64(chunk.offset); writer.U32(static_cast<std::uint32_t>(chunk.bytes.size())); writer.Bytes(chunk.chunk_hash); writer.Bytes(chunk.bytes); return writer.Take(); }
 Chunk DecodeChunk(std::span<const std::uint8_t> payload) { Reader reader(payload); Chunk chunk{}; auto transfer = reader.Bytes(chunk.transfer_id.size()); std::copy(transfer.begin(), transfer.end(), chunk.transfer_id.begin()); auto hash = reader.Bytes(chunk.file_hash.size()); std::copy(hash.begin(), hash.end(), chunk.file_hash.begin()); chunk.offset = reader.U64(); const auto length = reader.U32(); if (length > kLogicalChunkSize) throw std::invalid_argument("chunk too large"); auto chunk_hash = reader.Bytes(chunk.chunk_hash.size()); std::copy(chunk_hash.begin(), chunk_hash.end(), chunk.chunk_hash.begin()); chunk.bytes = reader.Bytes(length); reader.Finish(); if (TestHash(chunk.bytes) != chunk.chunk_hash) throw std::invalid_argument("chunk hash mismatch"); return chunk; }
 std::vector<std::uint8_t> EncodeFileRequest(const FileRequest& request) { if (request.missing_ranges.empty() || request.missing_ranges.size() > 1000000U) throw std::invalid_argument("invalid missing ranges"); Writer writer; writer.Bytes(request.transfer_id); writer.Bytes(request.file_hash); writer.U32(static_cast<std::uint32_t>(request.missing_ranges.size())); std::uint64_t previous_end = 0; for (const auto& range : request.missing_ranges) { if (range.chunk_count == 0 || range.first_chunk < previous_end || range.chunk_count > std::numeric_limits<std::uint64_t>::max() - range.first_chunk) throw std::invalid_argument("invalid missing range"); writer.U64(range.first_chunk); writer.U32(range.chunk_count); previous_end = range.first_chunk + range.chunk_count; } return writer.Take(); }
