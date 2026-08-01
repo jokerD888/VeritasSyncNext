@@ -1,0 +1,9 @@
+{
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": ["__VERITASSYNC_UPDATE_ENDPOINT__"],
+      "pubkey": "__VERITASSYNC_UPDATER_PUBKEY__"
+    }
+  }
+}

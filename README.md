@@ -48,3 +48,5 @@ See [`docs/PHASE3_DEVELOPMENT.md`](docs/PHASE3_DEVELOPMENT.md) for the multi-tar
 source ownership, slow-peer isolation, and one-way target policy.
 See [`docs/PHASE4_DEVELOPMENT.md`](docs/PHASE4_DEVELOPMENT.md) for two-peer version
 resolution and conflict behavior.
+See [`docs/PHASE5_DEVELOPMENT.md`](docs/PHASE5_DEVELOPMENT.md) for the desktop shell,
+independent engine IPC lifecycle, and Windows release workflow.
