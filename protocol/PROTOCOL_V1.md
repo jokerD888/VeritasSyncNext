@@ -20,6 +20,8 @@ unknown type, oversized payloads, and trailing/truncated bytes before dispatch.
 Control frames use `HELLO (1)`, `MANIFEST (2)`, `ERROR (3)`, `HEARTBEAT (4)`,
 `FILE_REQUEST (5)`.
 `CANCEL (6)` terminates a transfer with a stable reason code.
+`VERSION_MANIFEST (7)` is the Phase 4 bidirectional snapshot and carries the
+causal version metadata required for deterministic conflict handling.
 Bulk frames use `CHUNK (64)`, `CHUNK_ACK (65)`, `WINDOW_UPDATE (66)`. A transport
 must not accept a control type on the bulk channel or vice versa.
 
@@ -44,6 +46,27 @@ revision:u64 | entry_count:u32 |
 
 The Phase 0 manifest is a snapshot test payload, not yet a file scanner or a
 version/conflict model.
+
+## VERSION_MANIFEST v1 payload
+
+```text
+revision:u64 | entry_count:u32 |
+  relative_path:string | kind:u8 | size:u64 | content_hash:string |
+  version_id:string | origin_device_id:string | logical_clock:u64 |
+  parent_version_id:string | has_deleted_at:u8 | [deleted_at_ms:u64] (repeated)
+```
+
+`kind` is `file (1)`, `directory (2)`, or `tombstone (3)`. Files require a
+non-empty BLAKE3 content hash; directories and tombstones have zero size and no
+hash. A tombstone must carry `deleted_at_ms`; live entries must not.
+
+The empty `parent_version_id` denotes a root version. A bidirectional receiver
+persists this relation before resolving the record: known successor applies,
+known ancestor is retained, and incomparable versions become a conflict. The
+formal path chooses the smaller `(logical_clock, origin_device_id)` value,
+except that a directory wins a file-vs-directory collision to avoid recursive
+deletion. The losing file is preserved as
+`name.conflict.<device-id>.<logical-clock>.ext`.
 
 ## CHUNK v1 payload
 

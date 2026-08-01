@@ -5,8 +5,10 @@ current milestones provide the versioned protocol, durable SQLite state, a mock
 transport, the Phase 1 libwebrtc bridge/signaling boundary, and Phase 2/3 one-way
 synchronization. One authoritative source can share one scanned manifest revision
 with multiple independent targets; each target has its own transfer queue and
-backpressure budget. A production Tracker and cross-network WebRTC DataChannel
-validation remain pending.
+backpressure budget. Phase 4 additionally provides two-peer bidirectional
+synchronization with durable Lamport clocks, version ancestry, deterministic
+conflict copies, and restart-safe convergence. A production Tracker and
+cross-network WebRTC DataChannel validation remain pending.
 
 The storage layer also exposes a Phase 2 safety primitive: received files are written
 as same-directory `*.part` files, flushed, then atomically replaced under the task
@@ -36,3 +38,5 @@ so its WAL and temporary files can never be synchronized. See
 
 See [`docs/PHASE3_DEVELOPMENT.md`](docs/PHASE3_DEVELOPMENT.md) for the multi-target
 source ownership, slow-peer isolation, and one-way target policy.
+See [`docs/PHASE4_DEVELOPMENT.md`](docs/PHASE4_DEVELOPMENT.md) for two-peer version
+resolution and conflict behavior.
