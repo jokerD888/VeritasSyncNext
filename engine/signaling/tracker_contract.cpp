@@ -28,6 +28,26 @@ void TrackerRoom::Join(const JoinRequest& request) {
 void TrackerRoom::Forward(const RelayMessage& message) {
   if (!HasMember(message.sender_device_id) || !HasMember(message.recipient_device_id) || message.sender_device_id == message.recipient_device_id) throw std::invalid_argument("relay members are invalid");
   if (message.payload.empty() || message.payload.size() > kMaxSignalPayload) throw std::invalid_argument("signal payload is invalid");
+  if (topology_ == Topology::kOneWay) {
+    const auto& sender = members_.at(message.sender_device_id);
+    const auto& recipient = members_.at(message.recipient_device_id);
+    const bool source_to_target = sender.role == protocol::Role::kSource &&
+                                  recipient.role == protocol::Role::kTarget;
+    const bool target_to_source = sender.role == protocol::Role::kTarget &&
+                                  recipient.role == protocol::Role::kSource;
+    if (!source_to_target && !target_to_source) {
+      throw std::invalid_argument("one-way relay direction is invalid");
+    }
+    // Targets may only respond to a source-created session.  They can send an
+    // answer and their ICE candidates, but cannot create or restart a session.
+    if (target_to_source && message.kind != MessageKind::kAnswer &&
+        message.kind != MessageKind::kIceCandidate) {
+      throw std::invalid_argument("one-way target cannot initiate signaling");
+    }
+    if (source_to_target && message.kind == MessageKind::kAnswer) {
+      throw std::invalid_argument("one-way source cannot send an answer");
+    }
+  }
   inboxes_[message.recipient_device_id].push_back(message);
 }
 std::vector<std::string> TrackerRoom::Members() const { std::vector<std::string> result; result.reserve(members_.size()); for (const auto& member : members_) result.push_back(member.first); std::ranges::sort(result); return result; }

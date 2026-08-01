@@ -4,4 +4,6 @@ VSYNC_TEST(TaskPolicyForbidsOneWayTargetLocalScanning) {
   VSYNC_CHECK(veritassync::sync::CanScanLocalChanges({"a","one_way","source","C:/"}));
   VSYNC_CHECK(!veritassync::sync::CanScanLocalChanges({"a","one_way","target","C:/"}));
   VSYNC_CHECK(veritassync::sync::CanScanLocalChanges({"a","bidirectional","peer","C:/"}));
+  VSYNC_CHECK(!veritassync::sync::CanApplyLocalWatcherChange({"a","one_way","target","C:/"}));
+  VSYNC_CHECK(veritassync::sync::CanApplyLocalWatcherChange({"a","one_way","source","C:/"}));
 }

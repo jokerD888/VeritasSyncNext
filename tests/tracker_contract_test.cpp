@@ -37,3 +37,24 @@ VSYNC_TEST(TrackerContractEnforcesTopologyAdmission) {
   bidirectional.Join(Join("peer-b", protocol::Role::kPeer));
   VSYNC_CHECK_THROWS(bidirectional.Join(Join("peer-c", protocol::Role::kPeer)));
 }
+
+VSYNC_TEST(TrackerContractKeepsOneWayTargetsReadOnly) {
+  using namespace veritassync;
+  signaling::TrackerRoom room("task-1", signaling::Topology::kOneWay);
+  room.Join(Join("source", protocol::Role::kSource));
+  room.Join(Join("target-a", protocol::Role::kTarget));
+  room.Join(Join("target-b", protocol::Role::kTarget));
+
+  room.Forward({signaling::MessageKind::kOffer, "source", "target-a", "offer"});
+  room.Forward({signaling::MessageKind::kIceCandidate, "source", "target-b", "candidate"});
+  room.Forward({signaling::MessageKind::kAnswer, "target-a", "source", "answer"});
+  room.Forward({signaling::MessageKind::kIceCandidate, "target-a", "source", "candidate"});
+  VSYNC_CHECK(room.DrainInbox("target-a").size() == 1);
+  VSYNC_CHECK(room.DrainInbox("target-b").size() == 1);
+  VSYNC_CHECK(room.DrainInbox("source").size() == 2);
+
+  VSYNC_CHECK_THROWS(room.Forward({signaling::MessageKind::kOffer, "target-a", "source", "offer"}));
+  VSYNC_CHECK_THROWS(room.Forward({signaling::MessageKind::kIceRestart, "target-a", "source", "restart"}));
+  VSYNC_CHECK_THROWS(room.Forward({signaling::MessageKind::kOffer, "source", "source", "offer"}));
+  VSYNC_CHECK_THROWS(room.Forward({signaling::MessageKind::kOffer, "target-a", "target-b", "offer"}));
+}
