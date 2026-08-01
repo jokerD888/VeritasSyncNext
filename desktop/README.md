@@ -25,3 +25,7 @@ Release packaging, Windows signing, and updater publication are described in
 [`deploy/windows/README.md`](../deploy/windows/README.md). They require the
 release owner to provide a certificate, Tauri update signing key, and HTTPS
 release endpoint; no development key is committed to this repository.
+
+The shell checks for updates only when the user selects **检查更新**. A found
+release is downloaded and verified against the embedded Tauri public key before
+Windows starts its installer and exits the current shell.

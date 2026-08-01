@@ -2,12 +2,14 @@
 
 mod ipc;
 
+use serde::Serialize;
 use std::{fs, path::PathBuf, process::Command, thread, time::Duration};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager,
 };
+use tauri_plugin_updater::UpdaterExt;
 
 struct EngineRuntime {
     database: PathBuf,
@@ -118,6 +120,44 @@ fn select_folder() -> Option<String> {
         .map(|path| path.to_string_lossy().to_string())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AvailableUpdate {
+    version: String,
+    notes: Option<String>,
+}
+
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>, String> {
+    let updater = app.updater().map_err(|error| error.to_string())?;
+    updater
+        .check()
+        .await
+        .map(|update| {
+            update.map(|update| AvailableUpdate {
+                version: update.version,
+                notes: update.body,
+            })
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<String, String> {
+    let updater = app.updater().map_err(|error| error.to_string())?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "没有可安装的更新".to_string())?;
+    let version = update.version.clone();
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(version)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -150,7 +190,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ensure_engine,
             ipc_request,
-            select_folder
+            select_folder,
+            check_for_update,
+            install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running VeritasSync desktop");
