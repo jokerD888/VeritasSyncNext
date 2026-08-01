@@ -2,6 +2,7 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Select from "@radix-ui/react-select";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
@@ -19,22 +20,29 @@ import {
   LayoutDashboard,
   ListRestart,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   MonitorCog,
+  Monitor,
+  Moon,
   MoreHorizontal,
   Plus,
   RefreshCw,
+  Search,
   Settings2,
   ShieldCheck,
+  Sun,
   Trash2,
   TriangleAlert,
-  UploadCloud
+  UploadCloud,
+  X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { logError, logInfo, notify, readPreferences, savePreferences, type DesktopPreferences } from "@/lib/desktop";
+import { applyColorMode, logError, logInfo, notify, readEngineLog, readPreferences, resolveTheme, savePreferences, type DesktopPreferences, type ResolvedTheme } from "@/lib/desktop";
 import { engine, type Conflict, type EngineEvent, type EngineStatus, type SyncTask, type TaskMode, type TaskRole } from "@/lib/ipc";
 
 type View = "overview" | "tasks" | "conflicts" | "events" | "settings";
@@ -64,6 +72,19 @@ function roleLabel(task: SyncTask) {
 
 function Brand() {
   return <div className="flex items-center gap-3 px-2"><div className="grid size-9 place-items-center rounded-xl bg-gradient-to-br from-[#3983ff] to-[#1ac4c0] font-serif text-xl font-bold text-white shadow-[0_9px_20px_rgba(42,129,255,.32)]">V</div><div className="leading-tight"><div className="text-sm font-extrabold tracking-[.13em] text-white">VERITAS</div><div className="text-sm font-extrabold tracking-[.13em] text-[#85dff0]">SYNC</div></div></div>;
+}
+
+function Titlebar() {
+  const window = getCurrentWindow();
+  const ignoreDrag = (event: React.MouseEvent<HTMLButtonElement>) => event.stopPropagation();
+  return <div className="titlebar" data-tauri-drag-region onDoubleClick={() => void window.toggleMaximize().catch(() => undefined)}>
+    <div className="flex items-center gap-2" data-tauri-drag-region><div className="grid size-5 place-items-center rounded-md bg-gradient-to-br from-[#3983ff] to-[#1ac4c0] text-[11px] font-extrabold text-white">V</div><span className="font-semibold tracking-[-.015em]">VeritasSync Next</span><span className="titlebar-build">LOCAL WORKSPACE</span></div>
+    <div className="titlebar-controls">
+      <button aria-label="最小化" onMouseDown={ignoreDrag} onClick={() => void window.minimize().catch(() => undefined)}><Minimize2 className="size-4" /></button>
+      <button aria-label="最大化或还原" onMouseDown={ignoreDrag} onClick={() => void window.toggleMaximize().catch(() => undefined)}><Maximize2 className="size-3.5" /></button>
+      <button className="titlebar-close" aria-label="关闭窗口" onMouseDown={ignoreDrag} onClick={() => void window.close().catch(() => undefined)}><X className="size-4" /></button>
+    </div>
+  </div>;
 }
 
 interface CreateTaskDialogProps { onCreated: (taskId: string) => Promise<void>; }
@@ -129,15 +150,27 @@ export function App() {
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [refreshing, setRefreshing] = useState(true);
   const [engineError, setEngineError] = useState<string | null>(null);
-  const [preferences, setPreferences] = useState<DesktopPreferences>({ notificationsEnabled: true });
+  const [preferences, setPreferences] = useState<DesktopPreferences>({ notificationsEnabled: true, colorMode: "dark" });
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("dark");
   const lastEngineError = useRef<string | null>(null);
 
   useEffect(() => {
     void readPreferences()
-      .then(setPreferences)
+      .then(async (loaded) => {
+        setPreferences(loaded);
+        setResolvedTheme(await applyColorMode(loaded.colorMode));
+      })
       .catch((error) => logError(`Unable to load desktop preferences: ${String(error)}`));
     logInfo("Desktop React workspace initialized");
   }, []);
+
+  useEffect(() => {
+    if (preferences.colorMode !== "system") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const update = () => setResolvedTheme(resolveTheme("system"));
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, [preferences.colorMode]);
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true);
@@ -170,16 +203,16 @@ export function App() {
   const remove = async (task: SyncTask) => { try { await engine.deleteTask(task.id); toast.success("任务已删除", { description: `未删除 ${task.root} 中的文件。` }); logInfo(`Task removed: ${task.id}`); await refresh(true); } catch (error) { logError(`Delete task failed for ${task.id}: ${String(error)}`); toast.error("删除失败", { description: String(error) }); } };
   const resolve = async (conflict: Conflict) => { try { await engine.resolveConflict(conflict.id); toast.success("冲突已标记为已处理"); logInfo(`Conflict resolved: ${conflict.id}`); await refresh(true); } catch (error) { logError(`Resolve conflict failed for ${conflict.id}: ${String(error)}`); toast.error("操作失败", { description: String(error) }); } };
   const checkUpdates = async () => { try { const update = await invoke<{ version: string; notes?: string } | null>("check_for_update"); if (!update) return toast.success("当前已是最新版本"); toast(`发现 ${update.version}`, { description: update.notes ?? "下载、验证并安装后会重启应用。", action: { label: "安装", onClick: () => void invoke("install_update") } }); } catch (error) { toast.error("更新检查失败", { description: String(error) }); } };
-  const updatePreferences = async (next: DesktopPreferences) => { setPreferences(next); try { await savePreferences(next); logInfo(`Desktop preferences saved: notifications=${next.notificationsEnabled}`); } catch (error) { setPreferences(preferences); logError(`Unable to save desktop preferences: ${String(error)}`); toast.error("偏好保存失败", { description: String(error) }); } };
+  const updatePreferences = async (next: DesktopPreferences) => { setPreferences(next); try { setResolvedTheme(await applyColorMode(next.colorMode)); await savePreferences(next); logInfo(`Desktop preferences saved: notifications=${next.notificationsEnabled}, theme=${next.colorMode}`); } catch (error) { setPreferences(preferences); setResolvedTheme(await applyColorMode(preferences.colorMode)); logError(`Unable to save desktop preferences: ${String(error)}`); toast.error("偏好保存失败", { description: String(error) }); } };
 
-  return <><div className="window-shell"><aside className="mica-sidebar"><div className="sidebar-content"><Brand /><nav className="mt-13 grid gap-1">{views.map(({ id, label, icon: Icon }) => <button key={id} className="nav-item" data-active={view === id} onClick={() => setView(id)}><Icon className="size-4" /><span className="flex-1">{label}</span>{id === "conflicts" && taskConflicts.length > 0 ? <span className="rounded-full bg-[#80dbf0] px-2 py-0.5 font-mono text-[10px] font-semibold text-[#112039]">{taskConflicts.length}</span> : null}</button>)}</nav><div className="mt-auto border-t border-white/12 px-2 pt-5"><div className="flex items-center gap-2 text-sm text-[#d6e3f6]"><span className={`status-dot ${engineError ? "problem" : status ? "online" : ""}`} />{engineError ? "需要引擎" : status ? "Engine online" : "连接中"}</div><p className="mt-2 font-mono text-[10px] text-[#8496b4]">IPC / v1 · schema {status?.schemaVersion ?? "—"}</p></div></div></aside>
+  return <><div className="app-root" data-theme={resolvedTheme}><Titlebar /><div className="window-shell"><aside className="mica-sidebar"><div className="sidebar-content"><Brand /><nav className="mt-13 grid gap-1">{views.map(({ id, label, icon: Icon }) => <button key={id} className="nav-item" data-active={view === id} onClick={() => setView(id)}><Icon className="size-4" /><span className="flex-1">{label}</span>{id === "conflicts" && taskConflicts.length > 0 ? <span className="rounded-full bg-[#80dbf0] px-2 py-0.5 font-mono text-[10px] font-semibold text-[#112039]">{taskConflicts.length}</span> : null}</button>)}</nav><div className="mt-auto border-t border-white/12 px-2 pt-5"><div className="flex items-center gap-2 text-sm text-[#d6e3f6]"><span className={`status-dot ${engineError ? "problem" : status ? "online" : ""}`} />{engineError ? "需要引擎" : status ? "Engine online" : "连接中"}</div><p className="mt-2 font-mono text-[10px] text-[#8496b4]">IPC / v1 · schema {status?.schemaVersion ?? "—"}</p></div></div></aside>
     <main className="min-w-0 bg-canvas"><div className="mx-auto max-w-[1540px] px-[clamp(32px,5vw,80px)] py-10"><header className="flex min-h-20 items-center justify-between border-b border-line pb-7"><div><p className="eyebrow">VERITASSYNC NEXT / LOCAL CONTROL</p><h1 className="mt-1 text-4xl font-extrabold tracking-[-.05em] text-ink">{pageTitle}</h1></div><div className="flex items-center gap-2"><Button variant="ghost" onClick={checkUpdates}><UploadCloud className="size-4" />检查更新</Button><Button size="icon" variant="secondary" aria-label="刷新状态" onClick={() => void refresh()}><RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} /></Button><CreateTaskDialog onCreated={async (taskId) => { logInfo(`Task created: ${taskId}`); void notify(preferences, "VeritasSync 已创建任务", `任务 ${taskId} 已由本机引擎接管。`); await refresh(true); }} /></div></header>
       {view === "overview" && <Overview status={status} tasks={tasks} events={events} conflicts={taskConflicts} setView={setView} />}
       {view === "tasks" && <TaskList tasks={tasks} onScan={scan} onRemove={remove} />}
       {view === "conflicts" && <ConflictList conflicts={conflicts} onResolve={resolve} />}
       {view === "events" && <EventList events={events} />}
       {view === "settings" && <SettingsPanel preferences={preferences} onPreferencesChange={updatePreferences} />}
-    </div></main></div><Toaster richColors position="bottom-right" /></>;
+    </div></main></div></div><Toaster richColors position="bottom-right" /></>;
 }
 
 function Overview({ status, tasks, events, conflicts, setView }: { status: EngineStatus | null; tasks: SyncTask[]; events: EngineEvent[]; conflicts: Conflict[]; setView: (view: View) => void }) {
@@ -196,7 +229,23 @@ function DeleteTaskButton({ task, onRemove }: { task: SyncTask; onRemove?: (task
 
 function TaskList({ tasks, onScan, onRemove }: { tasks: SyncTask[]; onScan: (task: SyncTask) => void; onRemove: (task: SyncTask) => void }) { return <section className="mt-7"><Card className="p-6"><PanelHeading eyebrow="LOCAL ROOTS" title="同步任务" />{tasks.length ? <div className="grid gap-2">{tasks.map((task) => <TaskRow key={task.id} task={task} onScan={onScan} onRemove={onRemove} />)}</div> : <Empty icon={FolderOpen} title="还没有同步任务" detail="从右上角的新建任务开始配置本机同步目录。" />}</Card></section>; }
 function EventRow({ event }: { event: EngineEvent }) { return <div className="grid grid-cols-[78px_minmax(0,1fr)_auto] items-start gap-3 py-3"><time className="pt-0.5 font-mono text-[11px] text-[#7b8ba2]">{formatTime(event.timestamp)}</time><div className="min-w-0"><p className="truncate text-sm text-ink">{event.message}</p><p className="mt-1 font-mono text-[10px] text-muted">{event.taskId ?? "ENGINE"} · {event.level.toUpperCase()}</p></div><span className={`rounded-md border px-2 py-0.5 font-mono text-[10px] ${eventTone(event.level)}`}>{event.level}</span></div>; }
-function EventList({ events }: { events: EngineEvent[] }) { return <section className="mt-7"><Card className="p-6"><PanelHeading eyebrow="PERSISTED ENGINE LOG" title="运行事件" />{events.length ? <div className="divide-y divide-[#ecf0f5]">{events.map((event) => <EventRow key={event.id} event={event} />)}</div> : <Empty icon={Clock3} title="暂时没有事件" detail="引擎事件会持久化在本地状态库中。" />}</Card></section>; }
+function EventList({ events }: { events: EngineEvent[] }) {
+  const [rawLog, setRawLog] = useState("");
+  const [filter, setFilter] = useState("");
+  const [autoScroll, setAutoScroll] = useState(true);
+  const logBody = useRef<HTMLDivElement>(null);
+  const refreshLog = useCallback(async () => {
+    try { setRawLog(await readEngineLog()); }
+    catch (error) { logError(`Unable to read engine log: ${String(error)}`); }
+  }, []);
+
+  useEffect(() => { void refreshLog(); const timer = window.setInterval(() => void refreshLog(), 3_000); return () => window.clearInterval(timer); }, [refreshLog]);
+  useEffect(() => { if (autoScroll && logBody.current) logBody.current.scrollTop = logBody.current.scrollHeight; }, [rawLog, autoScroll]);
+
+  const fallback = events.map((event) => `${new Date(event.timestamp).toISOString()} [${event.level.toUpperCase()}] ${event.taskId ?? "ENGINE"} ${event.message}`).join("\n");
+  const visible = (rawLog || fallback).split(/\r?\n/).filter((line) => line && line.toLowerCase().includes(filter.toLowerCase()));
+  return <section className="mt-7"><div className="terminal"><div className="terminal-head"><div className="terminal-dot is-red" /><div className="terminal-dot is-amber" /><div className="terminal-dot is-green" /><span className="ml-3 font-mono text-xs text-[#9cabcb]">veritassync-next.log</span><span className="terminal-source">ENGINE / ROTATING FILE</span><div className="flex-1" /><label className="terminal-filter"><Search className="size-3.5" /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="grep / filter logs..." /></label><label className="ml-3 flex cursor-pointer items-center gap-2 text-xs text-[#aebbd3]"><input type="checkbox" checked={autoScroll} onChange={(event) => setAutoScroll(event.target.checked)} />自动滚动</label><Button size="sm" variant="ghost" className="ml-3 !text-[#c5d5f0] hover:!bg-white/8" onClick={() => void refreshLog()}><RefreshCw className="size-3.5" />刷新</Button></div><div className="terminal-body" ref={logBody}>{visible.length ? visible.map((line, index) => <p className="terminal-line" key={`${index}-${line}`}>{line}</p>) : <p className="terminal-empty">{filter ? "没有匹配的日志行。" : "正在等待 Engine 写入日志…"}</p>}</div></div></section>;
+}
 function ConflictList({ conflicts, onResolve }: { conflicts: Conflict[]; onResolve: (conflict: Conflict) => void }) { return <section className="mt-7"><Card className="p-6"><PanelHeading eyebrow="MANUAL REVIEW" title="冲突副本" />{conflicts.length ? <div className="grid gap-2">{conflicts.map((conflict) => <div className="data-row" key={conflict.id}><div className="min-w-0"><div className="flex items-center gap-2"><TriangleAlert className="size-4 text-[#d78b1c]" /><span className="font-semibold text-ink">{conflict.originalPath}</span><Badge>{conflict.state}</Badge></div><p className="mt-1 truncate text-sm text-muted">冲突副本：{conflict.conflictPath}</p></div>{conflict.state !== "resolved" && <Button variant="secondary" size="sm" onClick={() => onResolve(conflict)}><Check className="size-3.5" />标记已处理</Button>}</div>)}</div> : <Empty icon={ShieldCheck} title="没有待处理冲突" detail="两节点并发修改造成的冲突会在这里保留可解释的副本。" />}</Card></section>; }
-function SettingsPanel({ preferences, onPreferencesChange }: { preferences: DesktopPreferences; onPreferencesChange: (preferences: DesktopPreferences) => Promise<void> }) { return <section className="mt-7 grid grid-cols-[minmax(0,1fr)_minmax(300px,.6fr)] gap-4"><Card className="p-6"><PanelHeading eyebrow="DESKTOP PREFERENCES" title="桌面体验" /><div className="grid gap-2"><Setting icon={MonitorCog} title="窗口状态" detail="下次启动时恢复上次的位置、尺寸和最大化状态。" enabled /><Setting icon={Bell} title="系统通知" detail="同步完成、冲突和需要注意的错误会显示 Windows 通知。" enabled={preferences.notificationsEnabled} control={<button type="button" role="switch" aria-checked={preferences.notificationsEnabled} onClick={() => void onPreferencesChange({ ...preferences, notificationsEnabled: !preferences.notificationsEnabled })} className={`relative h-6 w-11 rounded-full transition ${preferences.notificationsEnabled ? "bg-brand" : "bg-[#b8c4d3]"}`}><span className={`absolute top-1 size-4 rounded-full bg-white shadow transition ${preferences.notificationsEnabled ? "left-6" : "left-1"}`} /></button>} /><Setting icon={CircleHelp} title="诊断日志" detail="桌面壳和前端错误会写入本地诊断日志，不写入同步数据库。" enabled /></div></Card><Card className="p-6"><PanelHeading eyebrow="SECURITY" title="数据边界" /><div className="space-y-4 text-sm leading-6 text-muted"><p>桌面 UI 通过版本化命名管道请求 Engine，不直接读取 SQLite 数据库或同步目录。</p><p className="rounded-xl border border-[#dce8fa] bg-[#f6f9ff] p-4 text-[#516d94]"><ShieldCheck className="mr-2 inline size-4 text-brand" />系统级目录选择、更新验证和通知均由 Tauri 原生能力完成。</p></div></Card></section>; }
+function SettingsPanel({ preferences, onPreferencesChange }: { preferences: DesktopPreferences; onPreferencesChange: (preferences: DesktopPreferences) => Promise<void> }) { return <section className="mt-7 grid grid-cols-[minmax(0,1fr)_minmax(300px,.6fr)] gap-4"><Card className="p-6"><PanelHeading eyebrow="DESKTOP PREFERENCES" title="桌面体验" /><div className="grid gap-2"><Setting icon={Moon} title="颜色模式" detail="默认使用深色工作台；也可以切换为浅色或跟随 Windows。" enabled control={<div className="theme-options">{([{ value: "dark", label: "深色", icon: Moon }, { value: "light", label: "浅色", icon: Sun }, { value: "system", label: "系统", icon: Monitor }] as const).map(({ value, label, icon: Icon }) => <button key={value} type="button" data-active={preferences.colorMode === value} onClick={() => void onPreferencesChange({ ...preferences, colorMode: value })}><Icon className="size-3.5" />{label}</button>)}</div>} /><Setting icon={MonitorCog} title="窗口状态" detail="下次启动时恢复上次的位置、尺寸和最大化状态。" enabled /><Setting icon={Bell} title="系统通知" detail="同步完成、冲突和需要注意的错误会显示 Windows 通知。" enabled={preferences.notificationsEnabled} control={<button type="button" role="switch" aria-checked={preferences.notificationsEnabled} onClick={() => void onPreferencesChange({ ...preferences, notificationsEnabled: !preferences.notificationsEnabled })} className={`relative h-6 w-11 rounded-full transition ${preferences.notificationsEnabled ? "bg-brand" : "bg-[#b8c4d3]"}`}><span className={`absolute top-1 size-4 rounded-full bg-white shadow transition ${preferences.notificationsEnabled ? "left-6" : "left-1"}`} /></button>} /><Setting icon={CircleHelp} title="引擎日志" detail="沿用旧项目的异步滚动文件日志；日志页支持筛选、刷新和自动滚动。" enabled /></div></Card><Card className="p-6"><PanelHeading eyebrow="SECURITY" title="数据边界" /><div className="space-y-4 text-sm leading-6 text-muted"><p>桌面 UI 通过版本化命名管道请求 Engine，不直接读取 SQLite 数据库或同步目录。</p><p className="rounded-xl border border-[#dce8fa] bg-[#f6f9ff] p-4 text-[#516d94]"><ShieldCheck className="mr-2 inline size-4 text-brand" />系统级目录选择、更新验证和通知均由 Tauri 原生能力完成。</p></div></Card></section>; }
 function Setting({ icon: Icon, title, detail, enabled, control }: { icon: typeof MonitorCog; title: string; detail: string; enabled: boolean; control?: React.ReactNode }) { return <div className="flex items-center gap-4 rounded-xl border border-[#e7edf5] bg-[#fbfcfe] p-4"><div className="grid size-10 place-items-center rounded-xl bg-[#edf3ff] text-brand"><Icon className="size-5" /></div><div className="min-w-0 flex-1"><p className="font-semibold text-ink">{title}</p><p className="mt-0.5 text-sm text-muted">{detail}</p></div>{control ?? <span className={`status-dot ${enabled ? "online" : ""}`} />}</div>; }

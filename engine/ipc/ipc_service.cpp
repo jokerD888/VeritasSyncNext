@@ -1,6 +1,7 @@
 #include "engine/ipc/ipc_service.h"
 
 #include "engine/common/uuid.h"
+#include "engine/common/logger.h"
 #include "engine/storage/ignore_rules.h"
 #include "engine/storage/manifest_scanner.h"
 #include "engine/sync/snapshot_reconciler.h"
@@ -10,6 +11,7 @@
 #include <charconv>
 #include <iomanip>
 #include <sstream>
+#include <spdlog/spdlog.h>
 #include <stdexcept>
 #include <vector>
 
@@ -79,6 +81,10 @@ void RequireCount(const std::vector<std::string>& fields, const std::size_t expe
   return limit;
 }
 void Record(storage::Database& database, std::optional<std::string> task_id, std::string message) {
+  if (common::g_logger) {
+    common::g_logger->info("{}", message);
+    common::g_logger->flush();
+  }
   database.RecordEngineEvent({0, std::move(task_id), "info", std::move(message), NowMilliseconds()});
 }
 
@@ -148,7 +154,10 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
       RequireCount(fields, 2); if (should_shutdown != nullptr) *should_shutdown = true; return Ok();
     }
     throw std::invalid_argument("unknown IPC command");
-  } catch (const std::exception& error) { return Error(error.what()); }
+  } catch (const std::exception& error) {
+    if (common::g_logger) common::g_logger->warn("IPC request rejected: {}", error.what());
+    return Error(error.what());
+  }
 }
 
 }  // namespace veritassync::ipc

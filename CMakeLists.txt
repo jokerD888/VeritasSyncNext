@@ -14,6 +14,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(blake3 CONFIG REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 
 function(veritassync_apply_warnings target)
   if(MSVC)
@@ -32,6 +33,7 @@ endfunction()
 add_library(veritassync_engine
   engine/common/protocol.cpp
   engine/common/content_hash.cpp
+  engine/common/logger.cpp
   engine/common/uuid.cpp
   engine/storage/database.cpp
   engine/storage/ignore_rules.cpp
@@ -62,6 +64,7 @@ add_library(veritassync_engine
 target_include_directories(veritassync_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(veritassync_engine PUBLIC unofficial::sqlite3::sqlite3)
 target_link_libraries(veritassync_engine PUBLIC BLAKE3::blake3)
+target_link_libraries(veritassync_engine PUBLIC spdlog::spdlog)
 if(WIN32)
   target_link_libraries(veritassync_engine PRIVATE kernel32 bcrypt advapi32)
 endif()

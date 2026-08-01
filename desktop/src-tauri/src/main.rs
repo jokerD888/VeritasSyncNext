@@ -151,6 +151,19 @@ async fn install_update(app: AppHandle) -> Result<String, String> {
     Ok(version)
 }
 
+#[tauri::command]
+fn read_engine_log(app: AppHandle) -> Result<String, String> {
+    let path = runtime(&app)?.database.with_file_name("veritassync-next.log");
+    match fs::read(path) {
+        Ok(bytes) => {
+            let start = bytes.len().saturating_sub(64 * 1024);
+            Ok(String::from_utf8_lossy(&bytes[start..]).into_owned())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
@@ -197,7 +210,8 @@ fn main() {
             ensure_engine,
             ipc_request,
             check_for_update,
-            install_update
+            install_update,
+            read_engine_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running VeritasSync desktop");
