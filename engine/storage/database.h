@@ -49,6 +49,22 @@ struct TransferRecord {
   std::string relative_path;
 };
 
+struct VersionLineage {
+  std::string task_id;
+  std::string version_id;
+  std::optional<std::string> parent_version_id;
+};
+
+struct ConflictRecord {
+  std::string conflict_id;
+  std::string task_id;
+  std::string original_path;
+  std::string winning_version_id;
+  std::string conflict_path;
+  std::string state;
+  std::int64_t created_at_ms = 0;
+};
+
 class Database {
  public:
   explicit Database(const std::filesystem::path& path);
@@ -66,6 +82,19 @@ class Database {
   [[nodiscard]] std::optional<FileRecord> FindFileRecord(
       const std::string& task_id, const std::string& relative_path) const;
   [[nodiscard]] std::vector<FileRecord> ListFileRecords(const std::string& task_id) const;
+  // A version's parent is immutable once recorded. The graph permits a peer to
+  // determine whether a received record is a successor or a concurrent branch.
+  void RecordVersionLineage(const VersionLineage& lineage);
+  [[nodiscard]] std::optional<VersionLineage> FindVersionLineage(
+      const std::string& task_id, const std::string& version_id) const;
+  [[nodiscard]] bool IsVersionAncestor(const std::string& task_id,
+                                       const std::string& ancestor_version_id,
+                                       const std::string& descendant_version_id) const;
+  // Advances the durable Lamport clock to max(local, observed_remote) + 1.
+  [[nodiscard]] std::uint64_t AdvanceLogicalClock(const std::string& task_id,
+                                                   std::uint64_t observed_remote_clock = 0);
+  void RecordConflict(const ConflictRecord& conflict);
+  [[nodiscard]] std::vector<ConflictRecord> ListConflicts(const std::string& task_id) const;
   void InTransaction(const std::function<void()>& operation);
   void CreateTransfer(const TransferRecord& transfer);
   void MarkTransferChunkCompleted(const TransferId& transfer_id, std::uint64_t chunk_index,

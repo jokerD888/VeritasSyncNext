@@ -10,7 +10,7 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.ApplyMigrations();
-    VSYNC_CHECK(database.SchemaVersion() == 2);
+    VSYNC_CHECK(database.SchemaVersion() == 3);
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
     const auto task = database.FindTask("task-1");
     VSYNC_CHECK(task.has_value());
@@ -20,6 +20,32 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     VSYNC_CHECK_THROWS(database.CreateTask({"invalid-two-way", "bidirectional", "source", "C:/sync"}));
     VSYNC_CHECK(database.CountRows("tasks") == 1);
     VSYNC_CHECK(database.CountRows("file_records") == 0);
+  }
+  std::filesystem::remove(path);
+  std::filesystem::remove(path.string() + "-shm");
+  std::filesystem::remove(path.string() + "-wal");
+}
+
+VSYNC_TEST(DatabasePersistsVersionLineageLamportClockAndConflicts) {
+  const auto path = std::filesystem::temp_directory_path() / ("veritassync-versions-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  {
+    veritassync::storage::Database database(path);
+    database.ApplyMigrations();
+    database.CreateTask({"task-1", "bidirectional", "peer", "C:/sync"});
+    database.RecordVersionLineage({"task-1", "v1", std::nullopt});
+    database.RecordVersionLineage({"task-1", "v2", std::optional<std::string>{"v1"}});
+    database.RecordVersionLineage({"task-1", "v3", std::optional<std::string>{"v2"}});
+    VSYNC_CHECK(database.IsVersionAncestor("task-1", "v1", "v3"));
+    VSYNC_CHECK(!database.IsVersionAncestor("task-1", "v3", "v1"));
+    VSYNC_CHECK_THROWS(database.RecordVersionLineage({"task-1", "v2", std::nullopt}));
+    VSYNC_CHECK(database.AdvanceLogicalClock("task-1") == 1);
+    VSYNC_CHECK(database.AdvanceLogicalClock("task-1", 7) == 8);
+    VSYNC_CHECK(database.AdvanceLogicalClock("task-1", 3) == 9);
+    database.RecordConflict({"conflict-1", "task-1", "notes.txt", "v2",
+                             "notes.conflict.device-b.8.txt", "unresolved", 1234});
+    const auto conflicts = database.ListConflicts("task-1");
+    VSYNC_CHECK(conflicts.size() == 1);
+    VSYNC_CHECK(conflicts[0].conflict_path == "notes.conflict.device-b.8.txt");
   }
   std::filesystem::remove(path);
   std::filesystem::remove(path.string() + "-shm");

@@ -59,6 +59,20 @@ ALTER TABLE transfers ADD COLUMN relative_path TEXT NOT NULL DEFAULT '';
 CREATE INDEX idx_transfers_active_download ON transfers(task_id, peer_device_id, relative_path, state);
 )sql";
 
+constexpr const char* kMigration3 = R"sql(
+CREATE TABLE version_lineage (
+  task_id TEXT NOT NULL REFERENCES tasks(task_id),
+  version_id TEXT NOT NULL,
+  parent_version_id TEXT,
+  PRIMARY KEY(task_id, version_id)
+);
+CREATE INDEX idx_version_lineage_parent ON version_lineage(task_id, parent_version_id);
+CREATE TABLE task_clocks (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
+  logical_clock INTEGER NOT NULL CHECK(logical_clock >= 0)
+);
+)sql";
+
 [[nodiscard]] const char* FileKindName(const FileKind kind) {
   switch (kind) {
     case FileKind::kFile: return "file";
@@ -144,6 +158,10 @@ void Database::ApplyMigrations() {
   if (SchemaVersion() < 2) {
     Execute("BEGIN IMMEDIATE;");
     try { Execute(kMigration2); Execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES(2, unixepoch() * 1000);"); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
+  }
+  if (SchemaVersion() < 3) {
+    Execute("BEGIN IMMEDIATE;");
+    try { Execute(kMigration3); Execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES(3, unixepoch() * 1000);"); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
   }
 }
 void Database::CreateTask(const TaskDefinition& task) {
@@ -276,6 +294,155 @@ std::vector<FileRecord> Database::ListFileRecords(const std::string& task_id) co
     }
     cleanup();
     return records;
+  } catch (...) { cleanup(); throw; }
+}
+
+void Database::RecordVersionLineage(const VersionLineage& lineage) {
+  if (lineage.task_id.empty() || lineage.version_id.empty() ||
+      (lineage.parent_version_id.has_value() &&
+       (lineage.parent_version_id->empty() || *lineage.parent_version_id == lineage.version_id))) {
+    throw std::invalid_argument("version lineage is invalid");
+  }
+  const auto existing = FindVersionLineage(lineage.task_id, lineage.version_id);
+  if (existing.has_value()) {
+    if (existing->parent_version_id != lineage.parent_version_id) {
+      throw std::invalid_argument("version lineage parent is immutable");
+    }
+    return;
+  }
+  constexpr const char* sql = "INSERT INTO version_lineage(task_id, version_id, parent_version_id) VALUES(?, ?, ?);";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare version lineage insert");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, lineage.task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind version task");
+    Check(sqlite3_bind_text(statement, 2, lineage.version_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind version id");
+    if (lineage.parent_version_id.has_value()) {
+      Check(sqlite3_bind_text(statement, 3, lineage.parent_version_id->c_str(), -1, SQLITE_TRANSIENT), connection_, "bind version parent");
+    } else {
+      Check(sqlite3_bind_null(statement, 3), connection_, "bind root version parent");
+    }
+    Check(sqlite3_step(statement), connection_, "insert version lineage");
+    cleanup();
+  } catch (...) { cleanup(); throw; }
+}
+
+std::optional<VersionLineage> Database::FindVersionLineage(const std::string& task_id,
+                                                            const std::string& version_id) const {
+  if (task_id.empty() || version_id.empty()) throw std::invalid_argument("version lineage lookup is invalid");
+  constexpr const char* sql = "SELECT parent_version_id FROM version_lineage WHERE task_id=? AND version_id=?;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare version lineage lookup");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind lineage lookup task");
+    Check(sqlite3_bind_text(statement, 2, version_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind lineage lookup id");
+    const int result = sqlite3_step(statement);
+    if (result == SQLITE_DONE) { cleanup(); return std::nullopt; }
+    Check(result, connection_, "read version lineage");
+    VersionLineage lineage{task_id, version_id, std::nullopt};
+    if (sqlite3_column_type(statement, 0) != SQLITE_NULL) {
+      lineage.parent_version_id = reinterpret_cast<const char*>(sqlite3_column_text(statement, 0));
+    }
+    cleanup();
+    return lineage;
+  } catch (...) { cleanup(); throw; }
+}
+
+bool Database::IsVersionAncestor(const std::string& task_id,
+                                 const std::string& ancestor_version_id,
+                                 const std::string& descendant_version_id) const {
+  if (task_id.empty() || ancestor_version_id.empty() || descendant_version_id.empty()) {
+    throw std::invalid_argument("version ancestry lookup is invalid");
+  }
+  std::string current = descendant_version_id;
+  for (std::size_t depth = 0; depth < 100000U; ++depth) {
+    if (current == ancestor_version_id) return true;
+    const auto lineage = FindVersionLineage(task_id, current);
+    if (!lineage.has_value() || !lineage->parent_version_id.has_value()) return false;
+    current = *lineage->parent_version_id;
+  }
+  throw std::runtime_error("version ancestry depth exceeds limit");
+}
+
+std::uint64_t Database::AdvanceLogicalClock(const std::string& task_id,
+                                            const std::uint64_t observed_remote_clock) {
+  if (task_id.empty() || observed_remote_clock > static_cast<std::uint64_t>((std::numeric_limits<sqlite3_int64>::max)())) {
+    throw std::invalid_argument("logical clock arguments are invalid");
+  }
+  Execute("BEGIN IMMEDIATE;");
+  try {
+    std::uint64_t current = 0;
+    sqlite3_stmt* select = nullptr;
+    Check(sqlite3_prepare_v2(connection_, "SELECT logical_clock FROM task_clocks WHERE task_id=?;", -1, &select, nullptr), connection_, "prepare logical clock lookup");
+    Check(sqlite3_bind_text(select, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind logical clock task");
+    const int result = sqlite3_step(select);
+    if (result == SQLITE_ROW) current = static_cast<std::uint64_t>(sqlite3_column_int64(select, 0));
+    else if (result != SQLITE_DONE) Check(result, connection_, "read logical clock");
+    sqlite3_finalize(select);
+    const auto base = (std::max)(current, observed_remote_clock);
+    if (base == static_cast<std::uint64_t>((std::numeric_limits<sqlite3_int64>::max)())) {
+      throw std::overflow_error("logical clock overflow");
+    }
+    const auto next = base + 1U;
+    sqlite3_stmt* update = nullptr;
+    Check(sqlite3_prepare_v2(connection_, "INSERT INTO task_clocks(task_id, logical_clock) VALUES(?, ?) ON CONFLICT(task_id) DO UPDATE SET logical_clock=excluded.logical_clock;", -1, &update, nullptr), connection_, "prepare logical clock update");
+    Check(sqlite3_bind_text(update, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind logical clock update task");
+    Check(sqlite3_bind_int64(update, 2, static_cast<sqlite3_int64>(next)), connection_, "bind logical clock value");
+    Check(sqlite3_step(update), connection_, "update logical clock");
+    sqlite3_finalize(update);
+    Execute("COMMIT;");
+    return next;
+  } catch (...) { Execute("ROLLBACK;"); throw; }
+}
+
+void Database::RecordConflict(const ConflictRecord& conflict) {
+  if (conflict.conflict_id.empty() || conflict.task_id.empty() || conflict.original_path.empty() ||
+      conflict.winning_version_id.empty() || conflict.conflict_path.empty() || conflict.state.empty() ||
+      conflict.created_at_ms <= 0) {
+    throw std::invalid_argument("conflict record is invalid");
+  }
+  ValidateRelativePath(conflict.original_path);
+  ValidateRelativePath(conflict.conflict_path);
+  constexpr const char* sql = "INSERT INTO conflicts(conflict_id, task_id, original_path, winning_version_id, conflict_path, state, created_at_ms) VALUES(?, ?, ?, ?, ?, ?, ?);";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare conflict insert");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, conflict.conflict_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind conflict id");
+    Check(sqlite3_bind_text(statement, 2, conflict.task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind conflict task");
+    Check(sqlite3_bind_text(statement, 3, conflict.original_path.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind conflict original path");
+    Check(sqlite3_bind_text(statement, 4, conflict.winning_version_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind conflict winner");
+    Check(sqlite3_bind_text(statement, 5, conflict.conflict_path.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind conflict path");
+    Check(sqlite3_bind_text(statement, 6, conflict.state.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind conflict state");
+    Check(sqlite3_bind_int64(statement, 7, conflict.created_at_ms), connection_, "bind conflict created time");
+    Check(sqlite3_step(statement), connection_, "insert conflict");
+    cleanup();
+  } catch (...) { cleanup(); throw; }
+}
+
+std::vector<ConflictRecord> Database::ListConflicts(const std::string& task_id) const {
+  if (task_id.empty()) throw std::invalid_argument("conflict task id is required");
+  constexpr const char* sql = "SELECT conflict_id, original_path, winning_version_id, conflict_path, state, created_at_ms FROM conflicts WHERE task_id=? ORDER BY created_at_ms, conflict_id;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare conflict list");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind conflict list task");
+    std::vector<ConflictRecord> result;
+    while (true) {
+      const int step = sqlite3_step(statement);
+      if (step == SQLITE_DONE) break;
+      Check(step, connection_, "read conflict record");
+      result.push_back({reinterpret_cast<const char*>(sqlite3_column_text(statement, 0)), task_id,
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 2)),
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 3)),
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 4)),
+                        sqlite3_column_int64(statement, 5)});
+    }
+    cleanup();
+    return result;
   } catch (...) { cleanup(); throw; }
 }
 void Database::InTransaction(const std::function<void()>& operation) {
