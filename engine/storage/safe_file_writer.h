@@ -29,6 +29,10 @@ class SafeFileWriter {
   void CommitPartial(std::string_view relative_path, std::uint64_t expected_size,
                      const common::ContentHash& expected_hash) const;
   void RemoveFile(std::string_view relative_path) const;
+  // Renames an existing regular file to a conflict path under the same task
+  // root. It never overwrites an existing conflict file or follows symlinks.
+  void MoveFileToConflict(std::string_view relative_path,
+                          std::string_view conflict_relative_path) const;
   void EnsureDirectory(std::string_view relative_path) const;
   void RemoveEmptyDirectory(std::string_view relative_path) const;
 

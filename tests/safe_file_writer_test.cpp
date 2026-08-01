@@ -96,6 +96,17 @@ VSYNC_TEST(SafeFileWriterRemovesOnlyRegularSynchronizedFiles) {
   VSYNC_CHECK_THROWS(writer.RemoveFile("nested"));
 }
 
+VSYNC_TEST(SafeFileWriterPreservesLocalFileAtConflictPath) {
+  TemporaryDirectory directory;
+  veritassync::storage::SafeFileWriter writer(directory.Path());
+  const std::vector<std::uint8_t> bytes{'l', 'o', 'c', 'a', 'l'};
+  writer.WriteAtomically("notes.txt", bytes);
+  writer.MoveFileToConflict("notes.txt", "notes.conflict.device-a.5.txt");
+  VSYNC_CHECK(!std::filesystem::exists(directory.Path() / "notes.txt"));
+  VSYNC_CHECK(ReadBytes(directory.Path() / "notes.conflict.device-a.5.txt") == bytes);
+  VSYNC_CHECK_THROWS(writer.MoveFileToConflict("notes.txt", "notes.conflict.device-a.5.txt"));
+}
+
 VSYNC_TEST(SafeFileWriterCreatesAndRemovesOnlyEmptyDirectories) {
   TemporaryDirectory directory;
   veritassync::storage::SafeFileWriter writer(directory.Path());

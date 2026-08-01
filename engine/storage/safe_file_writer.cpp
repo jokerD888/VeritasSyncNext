@@ -241,6 +241,26 @@ void SafeFileWriter::RemoveFile(const std::string_view relative_path) const {
   }
 }
 
+void SafeFileWriter::MoveFileToConflict(const std::string_view relative_path,
+                                        const std::string_view conflict_relative_path) const {
+  const auto source = ResolveTaskPath(task_root_, relative_path);
+  const auto destination = ResolveTaskPath(task_root_, conflict_relative_path);
+  if (source == destination) throw std::invalid_argument("conflict destination must differ from source");
+  RejectSymlink(source, "conflict source file must not be a symlink");
+  RejectSymlink(destination, "conflict destination file must not be a symlink");
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(source, error) || error) {
+    throw std::invalid_argument("conflict source must be a regular file");
+  }
+  if (std::filesystem::exists(destination, error) || error) {
+    throw std::invalid_argument("conflict destination already exists");
+  }
+  EnsureSafeDirectory(destination.parent_path());
+  if (!::MoveFileExW(source.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)) {
+    throw std::runtime_error("cannot preserve conflict file");
+  }
+}
+
 void SafeFileWriter::EnsureDirectory(const std::string_view relative_path) const {
   const auto directory = ResolveTaskPath(task_root_, relative_path);
   std::error_code error;
