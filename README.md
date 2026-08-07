@@ -53,3 +53,5 @@ independent engine IPC lifecycle, and Windows release workflow.
 See [`docs/IGNORE_RULES.md`](docs/IGNORE_RULES.md) for deterministic ignore-rule
 semantics, revision/undo behavior, risk previews, and optional privacy-bounded AI
 assistance.
+See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for reproducible Release benchmarks,
+the completed hot-path audit, and the remaining filesystem and real-network limits.

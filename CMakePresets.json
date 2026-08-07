@@ -13,7 +13,14 @@
     }
   ],
   "buildPresets": [
-    { "name": "default", "configurePreset": "default", "configuration": "Debug" }
+    { "name": "default", "configurePreset": "default", "configuration": "Debug" },
+    {
+      "name": "benchmark",
+      "displayName": "Release engine benchmark",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "targets": ["veritassync_benchmarks"]
+    }
   ],
   "testPresets": [
     {
