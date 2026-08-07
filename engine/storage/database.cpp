@@ -104,6 +104,40 @@ CREATE TABLE ignore_policy_state (
 CREATE INDEX idx_ignore_policy_history ON ignore_policy_revisions(task_id, revision DESC);
 )sql";
 
+constexpr const char* kMigration6 = R"sql(
+CREATE TABLE task_runtime (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+  status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle', 'watching', 'connecting', 'online', 'paused', 'error')),
+  dirty INTEGER NOT NULL DEFAULT 1 CHECK(dirty IN (0, 1)),
+  last_scan_at_ms INTEGER,
+  last_error TEXT
+);
+INSERT INTO task_runtime(task_id) SELECT task_id FROM tasks;
+CREATE TRIGGER task_runtime_after_task_insert
+AFTER INSERT ON tasks
+BEGIN
+  INSERT INTO task_runtime(task_id) VALUES(NEW.task_id);
+END;
+CREATE TABLE task_connections (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE CASCADE,
+  tracker_url TEXT NOT NULL,
+  room_id TEXT NOT NULL,
+  authorization_digest TEXT NOT NULL,
+  joined_at_ms INTEGER NOT NULL
+);
+CREATE TABLE task_members (
+  task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('source', 'target', 'peer')),
+  authorized_at_ms INTEGER NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0, 1)),
+  PRIMARY KEY(task_id, device_id)
+);
+CREATE INDEX idx_task_members_active ON task_members(task_id, revoked);
+)sql";
+
 [[nodiscard]] const char* FileKindName(const FileKind kind) {
   switch (kind) {
     case FileKind::kFile: return "file";
@@ -205,6 +239,10 @@ void Database::ApplyMigrations() {
     Execute("BEGIN IMMEDIATE;");
     try { Execute(kMigration5); Execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES(5, unixepoch() * 1000);"); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
   }
+  if (SchemaVersion() < 6) {
+    Execute("BEGIN IMMEDIATE;");
+    try { Execute(kMigration6); Execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES(6, unixepoch() * 1000);"); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
+  }
 }
 void Database::CreateTask(const TaskDefinition& task) {
   if (task.task_id.empty() || task.root_path.empty()) throw std::invalid_argument("task id and root path are required");
@@ -278,6 +316,186 @@ void Database::DeleteTask(const std::string& task_id) {
     if (sqlite3_changes(connection_) != 1) throw std::invalid_argument("task does not exist");
     Execute("COMMIT;");
   } catch (...) { Execute("ROLLBACK;"); throw; }
+}
+
+TaskRuntimeState Database::RuntimeState(const std::string& task_id) const {
+  if (task_id.empty()) throw std::invalid_argument("task id is required");
+  constexpr const char* sql =
+      "SELECT enabled, status, dirty, last_scan_at_ms, last_error FROM task_runtime WHERE task_id=?;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_,
+        "prepare task runtime lookup");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_,
+          "bind task runtime lookup");
+    const int result = sqlite3_step(statement);
+    if (result == SQLITE_DONE) throw std::invalid_argument("task does not exist");
+    Check(result, connection_, "read task runtime");
+    TaskRuntimeState state{task_id, sqlite3_column_int(statement, 0) != 0,
+                           reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+                           sqlite3_column_int(statement, 2) != 0};
+    if (sqlite3_column_type(statement, 3) != SQLITE_NULL) {
+      state.last_scan_at_ms = sqlite3_column_int64(statement, 3);
+    }
+    if (sqlite3_column_type(statement, 4) != SQLITE_NULL) {
+      state.last_error = reinterpret_cast<const char*>(sqlite3_column_text(statement, 4));
+    }
+    cleanup();
+    return state;
+  } catch (...) { cleanup(); throw; }
+}
+
+void Database::SetTaskEnabled(const std::string& task_id, const bool enabled) {
+  if (task_id.empty()) throw std::invalid_argument("task id is required");
+  constexpr const char* sql =
+      "UPDATE task_runtime SET enabled=?, status=?, dirty=CASE WHEN ? THEN 1 ELSE dirty END, last_error=NULL WHERE task_id=?;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_,
+        "prepare task enabled update");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_int(statement, 1, enabled ? 1 : 0), connection_, "bind task enabled");
+    Check(sqlite3_bind_text(statement, 2, enabled ? "idle" : "paused", -1, SQLITE_STATIC),
+          connection_, "bind task enabled status");
+    Check(sqlite3_bind_int(statement, 3, enabled ? 1 : 0), connection_, "bind task dirty reset");
+    Check(sqlite3_bind_text(statement, 4, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_,
+          "bind task enabled id");
+    Check(sqlite3_step(statement), connection_, "update task enabled");
+    if (sqlite3_changes(connection_) != 1) throw std::invalid_argument("task does not exist");
+    cleanup();
+  } catch (...) { cleanup(); throw; }
+}
+
+void Database::UpdateTaskRuntime(const std::string& task_id, std::string status,
+                                 const bool dirty,
+                                 const std::optional<std::int64_t> last_scan_at_ms,
+                                 std::optional<std::string> last_error) {
+  if (task_id.empty() || (status != "idle" && status != "watching" && status != "connecting" &&
+      status != "online" && status != "paused" && status != "error")) {
+    throw std::invalid_argument("task runtime state is invalid");
+  }
+  constexpr const char* sql =
+      "UPDATE task_runtime SET status=?, dirty=?, last_scan_at_ms=?, last_error=? WHERE task_id=?;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_,
+        "prepare task runtime update");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, status.c_str(), -1, SQLITE_TRANSIENT), connection_,
+          "bind task runtime status");
+    Check(sqlite3_bind_int(statement, 2, dirty ? 1 : 0), connection_, "bind task runtime dirty");
+    if (last_scan_at_ms.has_value()) Check(sqlite3_bind_int64(statement, 3, *last_scan_at_ms), connection_, "bind task scan time");
+    else Check(sqlite3_bind_null(statement, 3), connection_, "clear task scan time");
+    if (last_error.has_value()) Check(sqlite3_bind_text(statement, 4, last_error->c_str(), -1, SQLITE_TRANSIENT), connection_, "bind task runtime error");
+    else Check(sqlite3_bind_null(statement, 4), connection_, "clear task runtime error");
+    Check(sqlite3_bind_text(statement, 5, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_,
+          "bind task runtime id");
+    Check(sqlite3_step(statement), connection_, "update task runtime");
+    if (sqlite3_changes(connection_) != 1) throw std::invalid_argument("task does not exist");
+    cleanup();
+  } catch (...) { cleanup(); throw; }
+}
+
+void Database::ConfigureTaskConnection(const TaskConnection& connection) {
+  if (connection.task_id.empty() || connection.tracker_url.empty() || connection.room_id.empty() ||
+      connection.authorization_digest.size() != 64 || connection.joined_at_ms <= 0) {
+    throw std::invalid_argument("task connection is invalid");
+  }
+  constexpr const char* sql = R"sql(
+INSERT INTO task_connections(task_id, tracker_url, room_id, authorization_digest, joined_at_ms)
+VALUES(?, ?, ?, ?, ?)
+ON CONFLICT(task_id) DO UPDATE SET tracker_url=excluded.tracker_url, room_id=excluded.room_id,
+authorization_digest=excluded.authorization_digest, joined_at_ms=excluded.joined_at_ms;
+)sql";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_,
+        "prepare task connection upsert");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, connection.task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind connection task");
+    Check(sqlite3_bind_text(statement, 2, connection.tracker_url.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind tracker url");
+    Check(sqlite3_bind_text(statement, 3, connection.room_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind room id");
+    Check(sqlite3_bind_text(statement, 4, connection.authorization_digest.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind authorization digest");
+    Check(sqlite3_bind_int64(statement, 5, connection.joined_at_ms), connection_, "bind joined time");
+    Check(sqlite3_step(statement), connection_, "upsert task connection");
+    cleanup();
+  } catch (...) { cleanup(); throw; }
+}
+
+std::optional<TaskConnection> Database::FindTaskConnection(const std::string& task_id) const {
+  if (task_id.empty()) throw std::invalid_argument("task id is required");
+  constexpr const char* sql =
+      "SELECT tracker_url, room_id, authorization_digest, joined_at_ms FROM task_connections WHERE task_id=?;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_,
+        "prepare task connection lookup");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind connection lookup");
+    const int result = sqlite3_step(statement);
+    if (result == SQLITE_DONE) { cleanup(); return std::nullopt; }
+    Check(result, connection_, "read task connection");
+    TaskConnection connection{task_id,
+      reinterpret_cast<const char*>(sqlite3_column_text(statement, 0)),
+      reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+      reinterpret_cast<const char*>(sqlite3_column_text(statement, 2)),
+      sqlite3_column_int64(statement, 3)};
+    cleanup();
+    return connection;
+  } catch (...) { cleanup(); throw; }
+}
+
+void Database::UpsertTaskMember(const TaskMember& member) {
+  if (member.task_id.empty() || member.device_id.empty() || member.fingerprint.size() != 64 ||
+      (member.role != "source" && member.role != "target" && member.role != "peer") ||
+      member.authorized_at_ms <= 0) {
+    throw std::invalid_argument("task member is invalid");
+  }
+  constexpr const char* sql = R"sql(
+INSERT INTO task_members(task_id, device_id, fingerprint, role, authorized_at_ms, revoked)
+VALUES(?, ?, ?, ?, ?, ?)
+ON CONFLICT(task_id, device_id) DO UPDATE SET fingerprint=excluded.fingerprint,
+role=excluded.role, authorized_at_ms=excluded.authorized_at_ms, revoked=excluded.revoked;
+)sql";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare task member upsert");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, member.task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind member task");
+    Check(sqlite3_bind_text(statement, 2, member.device_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind member device");
+    Check(sqlite3_bind_text(statement, 3, member.fingerprint.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind member fingerprint");
+    Check(sqlite3_bind_text(statement, 4, member.role.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind member role");
+    Check(sqlite3_bind_int64(statement, 5, member.authorized_at_ms), connection_, "bind member time");
+    Check(sqlite3_bind_int(statement, 6, member.revoked ? 1 : 0), connection_, "bind member revoked");
+    Check(sqlite3_step(statement), connection_, "upsert task member");
+    cleanup();
+  } catch (...) { cleanup(); throw; }
+}
+
+std::vector<TaskMember> Database::ListTaskMembers(const std::string& task_id) const {
+  if (task_id.empty()) throw std::invalid_argument("task id is required");
+  constexpr const char* sql =
+      "SELECT device_id, fingerprint, role, authorized_at_ms, revoked FROM task_members WHERE task_id=? ORDER BY device_id;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare task member list");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind member list task");
+    std::vector<TaskMember> members;
+    while (true) {
+      const int result = sqlite3_step(statement);
+      if (result == SQLITE_DONE) break;
+      Check(result, connection_, "read task member");
+      members.push_back({task_id,
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 0)),
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 2)),
+        sqlite3_column_int64(statement, 3), sqlite3_column_int(statement, 4) != 0});
+    }
+    cleanup();
+    return members;
+  } catch (...) { cleanup(); throw; }
 }
 void Database::UpsertFileRecord(const FileRecord& record) {
   ValidateFileRecord(record);

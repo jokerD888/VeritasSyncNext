@@ -15,6 +15,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(blake3 CONFIG REQUIRED)
+find_package(unofficial-sodium CONFIG REQUIRED)
 
 function(veritassync_apply_warnings target)
   if(MSVC)
@@ -34,6 +35,7 @@ add_library(veritassync_engine
   engine/common/protocol.cpp
   engine/common/content_hash.cpp
   engine/common/uuid.cpp
+  engine/security/device_identity.cpp
   engine/storage/database.cpp
   engine/storage/ignore_rules.cpp
   engine/storage/ignore_policy.cpp
@@ -47,6 +49,7 @@ add_library(veritassync_engine
   engine/transport/webrtc_bridge_loader.cpp
   engine/transport/webrtc_transport.cpp
   engine/signaling/tracker_contract.cpp
+  engine/signaling/tracker_client.cpp
   engine/signaling/signaling_session.cpp
   engine/sync/manifest_diff.cpp
   engine/sync/download_receiver.cpp
@@ -64,8 +67,9 @@ add_library(veritassync_engine
 target_include_directories(veritassync_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(veritassync_engine PUBLIC unofficial::sqlite3::sqlite3)
 target_link_libraries(veritassync_engine PUBLIC BLAKE3::blake3)
+target_link_libraries(veritassync_engine PUBLIC unofficial-sodium::sodium)
 if(WIN32)
-  target_link_libraries(veritassync_engine PRIVATE kernel32 bcrypt advapi32)
+  target_link_libraries(veritassync_engine PRIVATE kernel32 bcrypt advapi32 winhttp)
 endif()
 
 if(VERITASSYNC_BUILD_BENCHMARKS)
@@ -117,6 +121,7 @@ if(BUILD_TESTING)
     tests/protocol_test.cpp
     tests/content_hash_test.cpp
     tests/uuid_test.cpp
+    tests/device_identity_test.cpp
     tests/database_test.cpp
     tests/ipc_service_test.cpp
     tests/ignore_rules_test.cpp
@@ -138,6 +143,7 @@ if(BUILD_TESTING)
     tests/connection_state_test.cpp
     tests/send_scheduler_test.cpp
     tests/tracker_contract_test.cpp
+    tests/tracker_client_test.cpp
   )
   if(VERITASSYNC_ENABLE_WEBRTC AND NOT VERITASSYNC_WEBRTC_BRIDGE_LIBRARY STREQUAL "")
     target_sources(veritassync_tests PRIVATE tests/webrtc_bridge_loader_test.cpp)

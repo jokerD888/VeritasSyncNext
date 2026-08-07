@@ -21,6 +21,32 @@ struct TaskDefinition {
   std::string root_path;
 };
 
+struct TaskRuntimeState {
+  std::string task_id;
+  bool enabled = true;
+  std::string status = "idle";
+  bool dirty = true;
+  std::optional<std::int64_t> last_scan_at_ms;
+  std::optional<std::string> last_error;
+};
+
+struct TaskConnection {
+  std::string task_id;
+  std::string tracker_url;
+  std::string room_id;
+  std::string authorization_digest;
+  std::int64_t joined_at_ms = 0;
+};
+
+struct TaskMember {
+  std::string task_id;
+  std::string device_id;
+  std::string fingerprint;
+  std::string role;
+  std::int64_t authorized_at_ms = 0;
+  bool revoked = false;
+};
+
 enum class FileKind { kFile, kDirectory, kTombstone };
 
 struct FileRecord {
@@ -95,6 +121,16 @@ class Database {
   [[nodiscard]] std::optional<TaskDefinition> FindTask(const std::string& task_id) const;
   [[nodiscard]] std::vector<TaskDefinition> ListTasks() const;
   void DeleteTask(const std::string& task_id);
+  [[nodiscard]] TaskRuntimeState RuntimeState(const std::string& task_id) const;
+  void SetTaskEnabled(const std::string& task_id, bool enabled);
+  void UpdateTaskRuntime(const std::string& task_id, std::string status, bool dirty,
+                         std::optional<std::int64_t> last_scan_at_ms,
+                         std::optional<std::string> last_error = std::nullopt);
+  void ConfigureTaskConnection(const TaskConnection& connection);
+  [[nodiscard]] std::optional<TaskConnection> FindTaskConnection(
+      const std::string& task_id) const;
+  void UpsertTaskMember(const TaskMember& member);
+  [[nodiscard]] std::vector<TaskMember> ListTaskMembers(const std::string& task_id) const;
   void UpsertFileRecord(const FileRecord& record);
   void RecordTombstone(std::string task_id, std::string relative_path,
                        std::string version_id, std::string origin_device_id,

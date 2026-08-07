@@ -3,6 +3,7 @@
 /desktop/src-tauri/resources/engine/*
 /desktop/src-tauri/tauri.release.generated.json
 /desktop/src-tauri/target/
+/tracker/target/
 /desktop/src-tauri/gen/
 /desktop/src-tauri/icons/*
 !/desktop/src-tauri/icons/icon.ico

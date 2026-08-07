@@ -10,7 +10,7 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.ApplyMigrations();
-    VSYNC_CHECK(database.SchemaVersion() == 5);
+    VSYNC_CHECK(database.SchemaVersion() == 6);
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
     const auto task = database.FindTask("task-1");
     VSYNC_CHECK(task.has_value());
@@ -20,6 +20,43 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     VSYNC_CHECK_THROWS(database.CreateTask({"invalid-two-way", "bidirectional", "source", "C:/sync"}));
     VSYNC_CHECK(database.CountRows("tasks") == 1);
     VSYNC_CHECK(database.CountRows("file_records") == 0);
+  }
+  std::filesystem::remove(path);
+  std::filesystem::remove(path.string() + "-shm");
+  std::filesystem::remove(path.string() + "-wal");
+}
+
+VSYNC_TEST(DatabasePersistsTaskRuntimeConnectionAndAuthorizedMembers) {
+  const auto path = std::filesystem::temp_directory_path() / ("veritassync-runtime-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  {
+    veritassync::storage::Database database(path);
+    database.ApplyMigrations();
+    database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
+    auto runtime = database.RuntimeState("task-1");
+    VSYNC_CHECK(runtime.enabled && runtime.dirty && runtime.status == "idle");
+    database.UpdateTaskRuntime("task-1", "watching", false, 1234);
+    runtime = database.RuntimeState("task-1");
+    VSYNC_CHECK(runtime.status == "watching" && !runtime.dirty);
+    VSYNC_CHECK(runtime.last_scan_at_ms == std::optional<std::int64_t>{1234});
+    database.SetTaskEnabled("task-1", false);
+    runtime = database.RuntimeState("task-1");
+    VSYNC_CHECK(!runtime.enabled && runtime.status == "paused");
+    database.SetTaskEnabled("task-1", true);
+    VSYNC_CHECK(database.RuntimeState("task-1").dirty);
+
+    database.ConfigureTaskConnection({"task-1", "https://tracker.example", "room-1",
+                                      std::string(64, 'a'), 1200});
+    const auto connection = database.FindTaskConnection("task-1");
+    VSYNC_CHECK(connection.has_value() && connection->room_id == "room-1");
+    database.UpsertTaskMember({"task-1", "device-a", std::string(64, 'b'), "source", 1200, false});
+    database.UpsertTaskMember({"task-1", "device-b", std::string(64, 'c'), "target", 1201, false});
+    const auto members = database.ListTaskMembers("task-1");
+    VSYNC_CHECK(members.size() == 2 && members[1].role == "target");
+
+    database.DeleteTask("task-1");
+    VSYNC_CHECK(database.CountRows("task_runtime") == 0);
+    VSYNC_CHECK(database.CountRows("task_connections") == 0);
+    VSYNC_CHECK(database.CountRows("task_members") == 0);
   }
   std::filesystem::remove(path);
   std::filesystem::remove(path.string() + "-shm");
