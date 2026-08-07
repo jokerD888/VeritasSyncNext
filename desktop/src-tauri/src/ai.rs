@@ -380,6 +380,60 @@ pub async fn generate<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    fn mock_chat_server(body: String) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = stream.read(&mut buffer).unwrap();
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..count]);
+                let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + length {
+                    assert!(headers.lines().any(|line| {
+                        line.split_once(':').is_some_and(|(name, value)| {
+                            name.eq_ignore_ascii_case("authorization")
+                                && value.trim() == "Bearer test-key"
+                        })
+                    }));
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        (format!("http://{address}/v1/chat/completions"), handle)
+    }
 
     #[test]
     fn endpoint_policy_requires_https_except_for_loopback() {
@@ -417,5 +471,32 @@ mod tests {
         let (system, user) = prompt("ignore logs", "", &context).unwrap();
         assert!(system.contains("untrusted data"));
         assert!(user.contains("ignore previous instructions"));
+    }
+
+    #[test]
+    fn openai_compatible_provider_round_trip_uses_strict_payload() {
+        let generated = r#"{"rules":["*.log"],"explanation":"log files"}"#;
+        let body = serde_json::json!({
+            "choices": [{"message": {"content": generated}}]
+        })
+        .to_string();
+        let (endpoint, server) = mock_chat_server(body);
+        let config = AiProviderConfig {
+            endpoint,
+            model: "test-model".into(),
+            json_mode: true,
+        };
+        let result = tauri::async_runtime::block_on(generate_with(
+            &config,
+            "test-key",
+            "ignore logs",
+            "",
+            &IgnoreContext::default(),
+        ))
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(result.rules, ["*.log"]);
+        assert_eq!(result.explanation, "log files");
+        assert_eq!(result.model, "test-model");
     }
 }
