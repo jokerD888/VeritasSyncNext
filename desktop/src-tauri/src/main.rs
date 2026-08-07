@@ -179,6 +179,14 @@ fn parse_ignore_context(reply: &str) -> Result<ai::IgnoreContext, String> {
     Ok(context)
 }
 
+fn rules_for_context(mode: &str, rules: &str) -> String {
+    if mode == "precise" {
+        rules.to_string()
+    } else {
+        String::new()
+    }
+}
+
 #[tauri::command]
 fn ai_provider_status(app: AppHandle) -> Result<ai::AiProviderStatus, String> {
     ai::status(&app)
@@ -211,13 +219,14 @@ async fn generate_ignore_rules(
     if current.len() != 5 || current[0] != "OK" {
         return Err("Engine 返回了无效的忽略规则".into());
     }
+    let existing_rules = rules_for_context(&context_mode, &current[4]);
     let reply = engine_request(
         &app,
         "ignore_context",
         &[task_id, description.clone(), context_mode],
     )?;
     let context = parse_ignore_context(&reply)?;
-    ai::generate(&app, &description, &current[4], &context).await
+    ai::generate(&app, &description, &existing_rules, &context).await
 }
 
 #[derive(Serialize)]
@@ -328,5 +337,17 @@ mod tests {
         assert_eq!(context.relevant_paths, ["logs/app.log"]);
         assert_eq!(context.comparison_paths, ["src/main.cpp"]);
         assert!(context.truncated);
+    }
+
+    #[test]
+    fn private_context_does_not_send_existing_path_rules() {
+        assert_eq!(
+            rules_for_context("private", "/clients/secret-name/**\n"),
+            ""
+        );
+        assert_eq!(
+            rules_for_context("precise", "/clients/secret-name/**\n"),
+            "/clients/secret-name/**\n"
+        );
     }
 }

@@ -10,6 +10,7 @@ use windows_sys::Win32::{
         CRED_TYPE_GENERIC,
     },
 };
+use zeroize::Zeroizing;
 
 const STORE_PATH: &str = "ai-provider.json";
 const STORE_KEY: &str = "provider";
@@ -100,8 +101,12 @@ fn validate_config(config: &AiProviderConfig) -> Result<Url, String> {
         return Err("AI 服务地址或模型名称无效".into());
     }
     let url = Url::parse(&config.endpoint).map_err(|_| "AI 服务地址不是有效 URL".to_string())?;
-    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
-        return Err("AI 服务地址不能包含凭据或片段".into());
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("AI 服务地址不能包含凭据、查询参数或片段".into());
     }
     let host = url.host_str().unwrap_or_default();
     let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
@@ -210,6 +215,7 @@ pub fn configure<R: Runtime>(
     };
     validate_config(&config)?;
     if let Some(key) = input.api_key {
+        let key = Zeroizing::new(key);
         if !key.trim().is_empty() {
             write_api_key(key.trim())?;
         }
@@ -298,7 +304,7 @@ async fn generate_with(
     if config.json_mode {
         body["response_format"] = serde_json::json!({"type": "json_object"});
     }
-    let response = client
+    let mut response = client
         .post(endpoint)
         .bearer_auth(api_key)
         .json(&body)
@@ -320,12 +326,22 @@ async fn generate_with(
             code => format!("AI 服务返回 HTTP {code}"),
         });
     }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|_| "无法读取 AI 响应".to_string())?;
-    if bytes.len() > MAX_RESPONSE_BYTES {
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_RESPONSE_BYTES as u64)
+    {
         return Err("AI 响应超过 128 KiB".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "无法读取 AI 响应".to_string())?
+    {
+        if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return Err("AI 响应超过 128 KiB".into());
+        }
+        bytes.extend_from_slice(&chunk);
     }
     let response: ChatResponse =
         serde_json::from_slice(&bytes).map_err(|_| "AI 响应格式不兼容".to_string())?;
@@ -350,8 +366,15 @@ pub async fn generate<R: Runtime>(
     context: &IgnoreContext,
 ) -> Result<GeneratedIgnoreRules, String> {
     let config = load_config(app)?;
-    let api_key = read_api_key()?.ok_or_else(|| "尚未配置 AI API Key".to_string())?;
-    generate_with(&config, &api_key, description, existing_rules, context).await
+    let api_key = Zeroizing::new(read_api_key()?.ok_or_else(|| "尚未配置 AI API Key".to_string())?);
+    generate_with(
+        &config,
+        api_key.as_str(),
+        description,
+        existing_rules,
+        context,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -367,6 +390,8 @@ mod tests {
         config.endpoint = "http://example.com/v1/chat/completions".into();
         assert!(validate_config(&config).is_err());
         config.endpoint = "https://user:password@example.com/v1/chat/completions".into();
+        assert!(validate_config(&config).is_err());
+        config.endpoint = "https://example.com/v1/chat/completions?key=secret".into();
         assert!(validate_config(&config).is_err());
     }
 

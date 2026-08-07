@@ -87,14 +87,15 @@ struct Inventory {
       continue;
     }
     const bool is_file = std::filesystem::is_regular_file(status);
-    if (is_file || std::filesystem::is_directory(status)) {
+    // Only files participate in context or preview results. Keeping directory
+    // entries would let a tree containing only empty directories bypass the
+    // bounded-inventory guarantee.
+    if (is_file) {
       inventory.entries.push_back({relative, is_file});
-      if (is_file) {
-        ++inventory.file_count;
-        if (inventory.file_count >= maximum_files) {
-          inventory.truncated = true;
-          break;
-        }
+      ++inventory.file_count;
+      if (inventory.file_count >= maximum_files) {
+        inventory.truncated = true;
+        break;
       }
     }
     iterator.increment(error);

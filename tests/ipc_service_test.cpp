@@ -75,5 +75,10 @@ VSYNC_TEST(IpcServicePreviewsAndAppliesVersionedIgnorePoliciesForSourcesOnly) {
   const auto target_hash = ResponseField(target, 2);
   VSYNC_CHECK(service.Handle("VSYNC_IPC/1\tignore_apply\ttarget\t" + target_hash +
       "\t*.tmp%0A\tmanual").starts_with("ERR\tone-way target ignore policy is read-only"));
+  temporary.Database().CreateTask({"peer", "bidirectional", "peer", root.string()});
+  const auto peer = service.Handle("VSYNC_IPC/1\tignore_get\tpeer");
+  const auto peer_hash = ResponseField(peer, 2);
+  VSYNC_CHECK(service.Handle("VSYNC_IPC/1\tignore_apply\tpeer\t" + peer_hash +
+      "\t*.tmp%0A\tmanual").starts_with("ERR\tbidirectional ignore policy requires peer negotiation"));
   std::filesystem::remove_all(root);
 }
