@@ -180,9 +180,8 @@ export function App() {
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setRefreshing(true);
     try {
-      const [nextStatus, nextTasks, nextEvents, nextConflicts] = await Promise.all([
-        engine.status(), engine.tasks(), engine.events(100), engine.conflicts()
-      ]);
+      const { status: nextStatus, tasks: nextTasks, events: nextEvents,
+        conflicts: nextConflicts } = await engine.dashboard(100);
       setStatus(nextStatus); setTasks(nextTasks); setEvents(nextEvents); setConflicts(nextConflicts); setEngineError(null); lastEngineError.current = null; engineWasOnline.current = true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

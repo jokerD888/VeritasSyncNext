@@ -115,6 +115,29 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
       return "OK\t" + std::to_string(database_.SchemaVersion()) + "\t" +
              std::to_string(database_.CountRows("tasks")) + "\n";
     }
+    if (command == "dashboard") {
+      RequireCount(fields, 3);
+      const auto tasks = database_.ListTasks();
+      const auto events = database_.ListEngineEvents(ParseLimit(fields[2]));
+      const auto conflicts = database_.ListConflicts();
+      std::string response = "OK\t" + std::to_string(database_.SchemaVersion()) + "\t" +
+                             std::to_string(tasks.size()) + "\n";
+      for (const auto& task : tasks) {
+        response += "TASK\t" + Escape(task.task_id) + "\t" + Escape(task.mode) + "\t" +
+                    Escape(task.role) + "\t" + Escape(task.root_path) + "\n";
+      }
+      for (const auto& event : events) {
+        response += "EVENT\t" + std::to_string(event.event_id) + "\t" +
+                    Escape(event.task_id.value_or("")) + "\t" + Escape(event.level) + "\t" +
+                    Escape(event.message) + "\t" + std::to_string(event.created_at_ms) + "\n";
+      }
+      for (const auto& conflict : conflicts) {
+        response += "CONFLICT\t" + Escape(conflict.conflict_id) + "\t" + Escape(conflict.state) +
+                    "\t" + Escape(conflict.original_path) + "\t" + Escape(conflict.conflict_path) +
+                    "\t" + Escape(conflict.winning_version_id) + "\n";
+      }
+      return response + "END\n";
+    }
     if (command == "list_tasks") {
       RequireCount(fields, 2); std::string response;
       for (const auto& task : database_.ListTasks()) response += "ROW\t" + Escape(task.task_id) + "\t" + Escape(task.mode) + "\t" + Escape(task.role) + "\t" + Escape(task.root_path) + "\n";

@@ -57,6 +57,13 @@ export interface IgnorePreview {
   trackedDeletionSamples: string[];
 }
 
+export interface DashboardSnapshot {
+  status: EngineStatus;
+  tasks: SyncTask[];
+  events: EngineEvent[];
+  conflicts: Conflict[];
+}
+
 const decodeField = (field: string) => field.replace(/%([0-9a-f]{2})/gi, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
 
 export function frameLines(reply: string): string[] {
@@ -108,6 +115,32 @@ export function parseConflicts(reply: string): Conflict[] {
     conflictPath,
     winningVersionId
   }));
+}
+
+export function parseDashboard(reply: string): DashboardSnapshot {
+  const status = parseStatus(reply);
+  const tasks: SyncTask[] = [];
+  const events: EngineEvent[] = [];
+  const conflicts: Conflict[] = [];
+  for (const line of frameLines(reply).slice(1)) {
+    const [kind, ...rawFields] = line.split("\t");
+    if (kind === "END") break;
+    const fields = rawFields.map(decodeField);
+    if (kind === "TASK") {
+      const [id, mode, role, root] = fields;
+      tasks.push({ id, mode: mode as TaskMode, role: role as TaskRole, root });
+    } else if (kind === "EVENT") {
+      const [id, taskId, level, message, timestamp] = fields;
+      events.push({ id, taskId: taskId || null, level: level as EngineEvent["level"], message, timestamp: Number(timestamp) });
+    } else if (kind === "CONFLICT") {
+      const [id, state, originalPath, conflictPath, winningVersionId] = fields;
+      conflicts.push({ id, state, originalPath, conflictPath, winningVersionId });
+    } else {
+      throw new Error("引擎返回了未知的工作台数据行");
+    }
+  }
+  if (tasks.length !== status.taskCount) throw new Error("引擎返回的任务计数不一致");
+  return { status, tasks, events, conflicts };
 }
 
 export function parseScanResult(reply: string): ScanResult {
@@ -163,6 +196,7 @@ const request = (command: string, args: string[] = []) => invoke<string>("ipc_re
 
 export const engine = {
   ensure: () => invoke<void>("ensure_engine"),
+  dashboard: async (eventLimit = 100) => parseDashboard(await request("dashboard", [String(eventLimit)])),
   status: async () => parseStatus(await request("status")),
   tasks: async () => parseTasks(await request("list_tasks")),
   events: async (limit = 100) => parseEvents(await request("list_events", [String(limit)])),

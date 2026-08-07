@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { frameRows, ignorePreviewNeedsConfirmation, parseEvents, parseIgnorePolicy, parseIgnorePreview, parseStatus, parseTasks } from "./ipc";
+import { frameRows, ignorePreviewNeedsConfirmation, parseDashboard, parseEvents, parseIgnorePolicy, parseIgnorePreview, parseStatus, parseTasks } from "./ipc";
 
 describe("IPC text frame adapter", () => {
   it("keeps row parsing independent from newlines and terminal END frames", () => {
@@ -13,6 +13,14 @@ describe("IPC text frame adapter", () => {
   it("maps task and event rows to typed records", () => {
     expect(parseTasks("ROW\tphoto\tbidirectional\tpeer\tD:%5CPhotos\nEND\n")[0]).toMatchObject({ id: "photo", mode: "bidirectional", role: "peer" });
     expect(parseEvents("ROW\t8\tphoto\twarning\tScan%20delayed\t1700000000000\nEND\n")[0]).toMatchObject({ id: "8", taskId: "photo", level: "warning", message: "Scan delayed" });
+  });
+
+  it("parses a consistent dashboard snapshot", () => {
+    const snapshot = parseDashboard("OK\t5\t1\nTASK\tphoto\tone_way\tsource\tD:%5CPhotos\nEVENT\t8\tphoto\tinfo\tReady\t1700000000000\nCONFLICT\tc1\tunresolved\ta.txt\ta.conflict.txt\tv2\nEND\n");
+    expect(snapshot.status).toEqual({ schemaVersion: "5", taskCount: 1 });
+    expect(snapshot.tasks[0].root).toBe("D:\\Photos");
+    expect(snapshot.events[0].message).toBe("Ready");
+    expect(snapshot.conflicts[0].id).toBe("c1");
   });
 
   it("parses versioned ignore policy and risk preview frames", () => {

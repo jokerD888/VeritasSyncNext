@@ -8,7 +8,9 @@ const OPEN_EXISTING: u32 = 3;
 const ERROR_FILE_NOT_FOUND: u32 = 2;
 const ERROR_PIPE_BUSY: u32 = 231;
 const ERROR_PIPE_NOT_CONNECTED: u32 = 233;
+const ERROR_MORE_DATA: u32 = 234;
 const MAX_CONNECT_ATTEMPTS: usize = 24;
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 fn is_transient_connect_error(error: u32) -> bool {
     matches!(
@@ -140,22 +142,31 @@ pub fn request(pipe: &str, command: &str, args: &[String]) -> Result<String, Str
         {
             return Err("cannot send IPC request".to_string());
         }
-        let mut buffer = vec![0_u8; 64 * 1024];
-        let mut read = 0;
-        if unsafe {
-            ReadFile(
-                handle,
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-                &mut read,
-                std::ptr::null_mut(),
-            )
-        } == 0
-        {
-            return Err("cannot read IPC response".to_string());
+        let mut response = Vec::new();
+        loop {
+            let mut buffer = vec![0_u8; 64 * 1024];
+            let mut read = 0;
+            let succeeded = unsafe {
+                ReadFile(
+                    handle,
+                    buffer.as_mut_ptr(),
+                    buffer.len() as u32,
+                    &mut read,
+                    std::ptr::null_mut(),
+                )
+            };
+            response.extend_from_slice(&buffer[..read as usize]);
+            if response.len() > MAX_RESPONSE_BYTES {
+                return Err("IPC response exceeds size limit".to_string());
+            }
+            if succeeded != 0 {
+                break;
+            }
+            if unsafe { GetLastError() } != ERROR_MORE_DATA {
+                return Err("cannot read IPC response".to_string());
+            }
         }
-        String::from_utf8(buffer[..read as usize].to_vec())
-            .map_err(|_| "IPC response is not UTF-8".to_string())
+        String::from_utf8(response).map_err(|_| "IPC response is not UTF-8".to_string())
     })();
     unsafe {
         CloseHandle(handle);
