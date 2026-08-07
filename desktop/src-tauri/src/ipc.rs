@@ -1,9 +1,4 @@
-use std::{
-    ffi::OsStr,
-    os::windows::ffi::OsStrExt,
-    thread,
-    time::Duration,
-};
+use std::{ffi::OsStr, os::windows::ffi::OsStrExt, thread, time::Duration};
 
 type Handle = isize;
 const INVALID_HANDLE_VALUE: Handle = -1isize;
@@ -61,6 +56,33 @@ fn escape(value: &str) -> String {
         }
         output
     })
+}
+
+pub fn unescape(value: &str) -> Result<String, String> {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            output.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        if index + 2 >= bytes.len() {
+            return Err("IPC escape is truncated".into());
+        }
+        let decode = |byte: u8| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        };
+        let high = decode(bytes[index + 1]).ok_or_else(|| "IPC escape is invalid".to_string())?;
+        let low = decode(bytes[index + 2]).ok_or_else(|| "IPC escape is invalid".to_string())?;
+        output.push((high << 4) | low);
+        index += 3;
+    }
+    String::from_utf8(output).map_err(|_| "IPC field is not UTF-8".into())
 }
 
 pub fn request(pipe: &str, command: &str, args: &[String]) -> Result<String, String> {
@@ -151,5 +173,12 @@ mod tests {
         assert!(is_transient_connect_error(ERROR_PIPE_BUSY));
         assert!(is_transient_connect_error(ERROR_PIPE_NOT_CONNECTED));
         assert!(!is_transient_connect_error(5)); // ERROR_ACCESS_DENIED
+    }
+
+    #[test]
+    fn decodes_engine_fields_without_accepting_malformed_escapes() {
+        assert_eq!(unescape("line%0Avalue%09x").unwrap(), "line\nvalue\tx");
+        assert!(unescape("bad%0").is_err());
+        assert!(unescape("bad%XZ").is_err());
     }
 }
