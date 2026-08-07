@@ -5,8 +5,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
-#include <vector>
 
 namespace veritassync::transport {
 
@@ -30,7 +30,7 @@ class SendScheduler {
   [[nodiscard]] bool CanResume(std::size_t transport_buffered_bytes) const;
 
  private:
-  std::array<std::vector<PendingSend>, 4> queues_;
+  std::array<std::deque<PendingSend>, 4> queues_;
   std::size_t max_pending_bytes_;
   std::size_t resume_below_bytes_;
   std::size_t pending_bytes_ = 0;

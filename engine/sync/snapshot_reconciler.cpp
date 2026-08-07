@@ -27,10 +27,6 @@ namespace {
   return record;
 }
 
-[[nodiscard]] bool SamePath(const storage::SnapshotEntry& entry, const std::string& path) {
-  return entry.relative_path == path;
-}
-
 }  // namespace
 
 SnapshotReconciler::SnapshotReconciler(VersionIdGenerator version_id_generator)
@@ -44,26 +40,43 @@ ReconcileResult SnapshotReconciler::Apply(storage::Database& database,
   if (config.task_id.empty() || config.origin_device_id.empty() || config.now_ms <= 0) {
     throw std::invalid_argument("reconciliation identity and timestamp are required");
   }
+  if (!std::ranges::is_sorted(snapshot, {}, &storage::SnapshotEntry::relative_path)) {
+    throw std::invalid_argument("reconciliation snapshot must be path-sorted");
+  }
   const auto known = database.ListFileRecords(config.task_id);
   const auto diff = DiffManifest(snapshot, known);
   ReconcileResult result{diff.created_or_changed.size(), diff.deleted_paths.size()};
-  database.InTransaction([&] {
-    for (const auto& entry : snapshot) {
-      const auto existing = std::ranges::find_if(known, [&](const storage::FileRecord& record) {
-        return SamePath(entry, record.relative_path);
-      });
-      const bool changed = std::ranges::find_if(diff.created_or_changed, [&](const storage::SnapshotEntry& changed_entry) {
-        return SamePath(entry, changed_entry.relative_path);
-      }) != diff.created_or_changed.end();
-      if (changed || existing == known.end()) {
-        database.UpsertFileRecord(MakeRecord(entry, config, version_id_generator_()));
-      } else {
-        auto refreshed = *existing;
-        refreshed.size = entry.size;
-        refreshed.mtime_ns = entry.mtime_ns;
-        database.UpsertFileRecord(refreshed);
-      }
+  std::vector<storage::FileRecord> upserts;
+  upserts.reserve(diff.created_or_changed.size());
+  std::size_t known_index = 0;
+  std::size_t changed_index = 0;
+  for (const auto& entry : snapshot) {
+    while (known_index < known.size() &&
+           known[known_index].relative_path < entry.relative_path) {
+      ++known_index;
     }
+    while (changed_index < diff.created_or_changed.size() &&
+           diff.created_or_changed[changed_index].relative_path < entry.relative_path) {
+      ++changed_index;
+    }
+    const storage::FileRecord* existing =
+        known_index < known.size() && known[known_index].relative_path == entry.relative_path
+            ? &known[known_index]
+            : nullptr;
+    const bool changed = changed_index < diff.created_or_changed.size() &&
+                         diff.created_or_changed[changed_index].relative_path == entry.relative_path;
+    if (changed || existing == nullptr) {
+      upserts.push_back(MakeRecord(entry, config, version_id_generator_()));
+    } else if (existing->size != entry.size || existing->mtime_ns != entry.mtime_ns) {
+      auto refreshed = *existing;
+      refreshed.size = entry.size;
+      refreshed.mtime_ns = entry.mtime_ns;
+      upserts.push_back(std::move(refreshed));
+    }
+  }
+  if (upserts.empty() && diff.deleted_paths.empty()) return result;
+  database.InTransaction([&] {
+    for (const auto& record : upserts) database.UpsertFileRecord(record);
     for (const auto& path : diff.deleted_paths) {
       database.RecordTombstone(config.task_id, path, version_id_generator_(), config.origin_device_id,
                                config.logical_clock, config.now_ms);

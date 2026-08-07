@@ -3,8 +3,8 @@
 #include "engine/transport/transport.h"
 
 #include <functional>
+#include <deque>
 #include <memory>
-#include <vector>
 
 namespace veritassync::transport {
 
@@ -35,7 +35,7 @@ class MockNetwork {
   void Enqueue(MockEndpoint* sender, protocol::Channel channel, std::vector<std::uint8_t> wire);
   MockEndpoint* first_ = nullptr;
   MockEndpoint* second_ = nullptr;
-  std::vector<Pending> pending_;
+  std::deque<Pending> pending_;
   friend class MockEndpoint;
 };
 }  // namespace veritassync::transport

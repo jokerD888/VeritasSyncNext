@@ -15,6 +15,6 @@ void MockEndpoint::SetBufferedAmount(const protocol::Channel channel, const std:
 void MockEndpoint::SetReceiveCallback(ReceiveCallback callback) { callback_ = std::move(callback); }
 MockNetwork::Pair MockNetwork::CreatePair() { if (first_ != nullptr) throw std::logic_error("mock network supports one pair"); auto first = std::make_unique<MockEndpoint>(*this); auto second = std::make_unique<MockEndpoint>(*this); first_ = first.get(); second_ = second.get(); return {std::move(first), std::move(second)}; }
 void MockNetwork::Enqueue(MockEndpoint* sender, protocol::Channel channel, std::vector<std::uint8_t> wire) { MockEndpoint* recipient = sender == first_ ? second_ : first_; if (recipient == nullptr) throw std::logic_error("unknown mock endpoint"); pending_.push_back({recipient, channel, std::move(wire)}); }
-bool MockNetwork::PumpOne() { if (pending_.empty()) return false; auto next = std::move(pending_.front()); pending_.erase(pending_.begin()); if (next.recipient->callback_) next.recipient->callback_(next.channel, std::move(next.wire)); return true; }
+bool MockNetwork::PumpOne() { if (pending_.empty()) return false; auto next = std::move(pending_.front()); pending_.pop_front(); if (next.recipient->callback_) next.recipient->callback_(next.channel, std::move(next.wire)); return true; }
 void MockNetwork::PumpUntilIdle() { while (PumpOne()) {} }
 }  // namespace veritassync::transport

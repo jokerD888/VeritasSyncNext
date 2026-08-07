@@ -33,7 +33,7 @@ VSYNC_TEST(SnapshotReconcilerWritesNewVersionsMetadataAndTombstonesAtomically) {
                                Hash(2), "gone-version", "device-a", 0, std::nullopt});
     int version = 0;
     veritassync::sync::SnapshotReconciler reconciler([&] { return "version-" + std::to_string(++version); });
-    const auto result = reconciler.Apply(database, {File("same.txt", 1, 99), File("new.txt", 3, 4)},
+    const auto result = reconciler.Apply(database, {File("new.txt", 3, 4), File("same.txt", 1, 99)},
                                          {"task-1", "device-a", 0, 1234});
     VSYNC_CHECK(result.created_or_changed == 1);
     VSYNC_CHECK(result.tombstoned == 1);

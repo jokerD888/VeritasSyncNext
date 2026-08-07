@@ -26,7 +26,7 @@ std::optional<PendingSend> SendScheduler::Next(const std::size_t transport_buffe
   for (auto& queue : queues_) {
     if (!queue.empty()) {
       PendingSend next = std::move(queue.front());
-      queue.erase(queue.begin());
+      queue.pop_front();
       pending_bytes_ -= next.wire.size();
       return next;
     }

@@ -8,6 +8,7 @@
 #include "engine/transport/send_scheduler.h"
 
 #include <array>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -72,6 +73,7 @@ std::vector<veritassync::storage::SnapshotEntry> MakeSnapshot(const std::size_t 
     entries.push_back({PathFor(index), veritassync::storage::SnapshotKind::kFile,
                        1024U + index, static_cast<std::int64_t>(1000U + index), HashFor(index)});
   }
+  std::ranges::sort(entries, {}, &veritassync::storage::SnapshotEntry::relative_path);
   return entries;
 }
 
@@ -85,6 +87,7 @@ std::vector<veritassync::storage::FileRecord> MakeRecords(const std::size_t coun
                        {hash.begin(), hash.end()}, "version-" + std::to_string(index),
                        "device-a", 1, std::nullopt});
   }
+  std::ranges::sort(records, {}, &veritassync::storage::FileRecord::relative_path);
   return records;
 }
 
