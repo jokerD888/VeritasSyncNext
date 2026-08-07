@@ -13,6 +13,7 @@ class IgnoreRules {
  public:
   IgnoreRules();
 
+  static void Validate(std::string_view text);
   void Load(std::string_view text);
   void LoadFile(const std::filesystem::path& task_root);
   [[nodiscard]] bool IsIgnored(std::string_view relative_path) const;

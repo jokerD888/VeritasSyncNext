@@ -35,6 +35,7 @@ add_library(veritassync_engine
   engine/common/uuid.cpp
   engine/storage/database.cpp
   engine/storage/ignore_rules.cpp
+  engine/storage/ignore_policy.cpp
   engine/storage/manifest_scanner.cpp
   engine/storage/safe_file_writer.cpp
   engine/ipc/ipc_service.cpp
@@ -112,6 +113,7 @@ if(BUILD_TESTING)
     tests/database_test.cpp
     tests/ipc_service_test.cpp
     tests/ignore_rules_test.cpp
+    tests/ignore_policy_test.cpp
     tests/manifest_scanner_test.cpp
     tests/manifest_diff_test.cpp
     tests/download_receiver_test.cpp

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -119,6 +120,86 @@ IgnoreRules::IgnoreRules() {
   };
 }
 
+void IgnoreRules::Validate(const std::string_view text) {
+  constexpr std::size_t kMaximumBytes = 16U * 1024U;
+  constexpr std::size_t kMaximumLineBytes = 512U;
+  constexpr std::size_t kMaximumRules = 128U;
+  if (text.size() > kMaximumBytes) {
+    throw std::invalid_argument("ignore rules exceed 16 KiB");
+  }
+  if (text.find('\0') != std::string_view::npos) {
+    throw std::invalid_argument("ignore rules contain a null byte");
+  }
+
+  std::size_t rule_count = 0;
+  std::size_t line_number = 0;
+  std::size_t begin = 0;
+  while (begin <= text.size()) {
+    ++line_number;
+    const auto end = text.find('\n', begin);
+    std::string line{text.substr(begin, end == std::string_view::npos ? text.size() - begin : end - begin)};
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.size() > kMaximumLineBytes) {
+      throw std::invalid_argument("ignore rule line " + std::to_string(line_number) + " exceeds 512 bytes");
+    }
+    const auto first = line.find_first_not_of(" \t");
+    if (first != std::string::npos) {
+      line.erase(0, first);
+      const auto last = line.find_last_not_of(" \t");
+      line.erase(last + 1);
+      if (!line.empty() && line.front() != '#') {
+        const bool escaped_prefix = line.starts_with("\\!") || line.starts_with("\\#");
+        if (escaped_prefix) line.erase(0, 1);
+        if (!line.empty() && line.front() == '!') line.erase(0, 1);
+        if (!line.empty() && line.front() == '/') line.erase(0, 1);
+        if (!line.empty() && line.back() == '/') line.pop_back();
+        if (line.empty()) {
+          throw std::invalid_argument("ignore rule line " + std::to_string(line_number) + " has no pattern");
+        }
+        if (line.find('\\') != std::string::npos) {
+          throw std::invalid_argument("ignore rule line " + std::to_string(line_number) + " contains an unsupported escape");
+        }
+        std::size_t component_begin = 0;
+        while (component_begin <= line.size()) {
+          const auto component_end = line.find('/', component_begin);
+          const auto component = line.substr(component_begin, component_end == std::string::npos
+              ? line.size() - component_begin : component_end - component_begin);
+          if (component.empty() || component == "." || component == "..") {
+            throw std::invalid_argument("ignore rule line " + std::to_string(line_number) + " contains an invalid path component");
+          }
+          if (component_end == std::string::npos) break;
+          component_begin = component_end + 1;
+        }
+        for (std::size_t position = 0; position < line.size(); ++position) {
+          const auto byte = static_cast<unsigned char>(line[position]);
+          if (byte < 0x20U) {
+            throw std::invalid_argument("ignore rule line " + std::to_string(line_number) + " contains a control character");
+          }
+          if (line[position] == '[') {
+            const auto close = line.find(']', position + 1);
+            if (close == std::string::npos || close == position + 1 ||
+                (close == position + 2 && line[position + 1] == '!')) {
+              throw std::invalid_argument("ignore rule line " + std::to_string(line_number) + " has an invalid character class");
+            }
+            position = close;
+          } else if (line[position] == ']') {
+            throw std::invalid_argument("ignore rule line " + std::to_string(line_number) + " has an unmatched bracket");
+          }
+        }
+        ++rule_count;
+        if (rule_count > kMaximumRules) {
+          throw std::invalid_argument("ignore rules exceed 128 patterns");
+        }
+      }
+    }
+    if (end == std::string_view::npos) break;
+    begin = end + 1;
+  }
+  if (rule_count == 0 && !text.empty()) {
+    throw std::invalid_argument("ignore rules do not contain a pattern");
+  }
+}
+
 std::string IgnoreRules::Normalize(const std::string_view value) {
   if (value.empty()) {
     throw std::invalid_argument("ignore path is required");
@@ -150,6 +231,7 @@ std::string IgnoreRules::Normalize(const std::string_view value) {
 }
 
 void IgnoreRules::Load(const std::string_view text) {
+  Validate(text);
   rules_.clear();
   std::size_t begin = 0;
   while (begin <= text.size()) {
