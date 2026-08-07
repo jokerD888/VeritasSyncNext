@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { frameRows, parseEvents, parseIgnorePolicy, parseIgnorePreview, parseStatus, parseTasks } from "./ipc";
+import { frameRows, ignorePreviewNeedsConfirmation, parseEvents, parseIgnorePolicy, parseIgnorePreview, parseStatus, parseTasks } from "./ipc";
 
 describe("IPC text frame adapter", () => {
   it("keeps row parsing independent from newlines and terminal END frames", () => {
@@ -19,9 +19,13 @@ describe("IPC text frame adapter", () => {
     expect(parseIgnorePolicy("OK\t2\tabc\t1\t*.log%0Abuild%2F%0A\n")).toEqual({
       revision: 2, hash: "abc", canUndo: true, rules: "*.log\nbuild/\n"
     });
-    expect(parseIgnorePreview("OK\tabc\t20\t1\t3\t2\t0\t1\t0\nIGNORE\tcache%2Fa.bin\nDELETE\tlogs%2Fold.log\nEND\n")).toMatchObject({
+    const preview = parseIgnorePreview("OK\tabc\t20\t1\t3\t2\t0\t1\t0\nIGNORE\tcache%2Fa.bin\nDELETE\tlogs%2Fold.log\nEND\n");
+    expect(preview).toMatchObject({
       expectedHash: "abc", scannedFiles: 20, newlyIgnored: 2, trackedNewlyIgnored: 1,
       newlyIgnoredSamples: ["cache/a.bin"], trackedDeletionSamples: ["logs/old.log"]
     });
+    expect(ignorePreviewNeedsConfirmation(preview)).toBe(true);
+    expect(ignorePreviewNeedsConfirmation({ ...preview, trackedNewlyIgnored: 0, truncated: true })).toBe(true);
+    expect(ignorePreviewNeedsConfirmation({ ...preview, trackedNewlyIgnored: 0, truncated: false })).toBe(false);
   });
 });

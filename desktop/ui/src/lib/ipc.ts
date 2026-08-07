@@ -155,6 +155,10 @@ export function parseAppliedIgnorePolicy(reply: string): Pick<IgnorePolicyState,
   return { revision: Number(fields[1]), hash: fields[2] };
 }
 
+export function ignorePreviewNeedsConfirmation(preview: IgnorePreview): boolean {
+  return preview.trackedNewlyIgnored > 0 || preview.truncated;
+}
+
 const request = (command: string, args: string[] = []) => invoke<string>("ipc_request", { command, args });
 
 export const engine = {

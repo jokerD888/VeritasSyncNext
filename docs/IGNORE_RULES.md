@@ -61,9 +61,11 @@ root. Non-loopback endpoints must use HTTPS and redirects are disabled.
 
 Two context modes are available:
 
-- **Private** sends the user request plus aggregated directory/extension metadata.
-- **Precise** additionally sends bounded relative-path samples selected by the
-  Engine. It still never sends file contents or absolute paths.
+- **Private** sends the user request plus aggregated depth/extension metadata; it
+  does not send existing rule text because those rules may contain private names.
+- **Precise** additionally sends existing rule text and bounded relative-path
+  samples selected by the Engine. It still never sends file contents or absolute
+  paths.
 
 Directory names and sample paths are treated as untrusted prompt data. Provider
 output must be one JSON object containing exactly `rules` and `explanation`; markdown,

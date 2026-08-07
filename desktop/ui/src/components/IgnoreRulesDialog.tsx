@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ai, mergeGeneratedRules, type GeneratedIgnoreRules, type IgnoreContextMode } from "@/lib/ai";
-import { engine, type IgnorePolicyState, type IgnorePreview, type SyncTask } from "@/lib/ipc";
+import { engine, ignorePreviewNeedsConfirmation, type IgnorePolicyState, type IgnorePreview, type SyncTask } from "@/lib/ipc";
 
 interface IgnoreRulesDialogProps {
   task: SyncTask;
@@ -90,7 +90,7 @@ export function IgnoreRulesDialog({ task }: IgnoreRulesDialogProps) {
     let checked = preview;
     if (!checked || checked.expectedHash !== policy.hash) checked = await runPreview();
     if (!checked) return;
-    if (checked.trackedNewlyIgnored > 0 && !confirmRisk) {
+    if (ignorePreviewNeedsConfirmation(checked) && !confirmRisk) {
       setConfirmRisk(true);
       return;
     }
@@ -168,10 +168,10 @@ export function IgnoreRulesDialog({ task }: IgnoreRulesDialogProps) {
           {preview ? <div className="preview-grid">
             <div><strong>{preview.scannedFiles}</strong><span>已扫描文件</span></div><div><strong>{preview.proposedIgnored}</strong><span>应用后忽略</span></div><div><strong className="text-[#43c6ad]">+{preview.newlyIgnored}</strong><span>新增忽略</span></div><div><strong className={preview.trackedNewlyIgnored ? "text-[#ff7c87]" : ""}>{preview.trackedNewlyIgnored}</strong><span>已跟踪删除风险</span></div>
           </div> : <div className="preview-empty">修改或生成规则后，请先运行影响预览。Engine 只读取元数据，不读取文件内容。</div>}
-          {preview?.trackedNewlyIgnored ? <div className="risk-warning"><AlertTriangle className="size-5" /><div><strong>{preview.trackedNewlyIgnored} 个已跟踪文件会在下次扫描成为删除记录</strong><p>{preview.trackedDeletionSamples.join(" · ")}{preview.truncated ? " · 样本已截断" : ""}</p></div></div> : null}
+          {preview && ignorePreviewNeedsConfirmation(preview) ? <div className="risk-warning"><AlertTriangle className="size-5" /><div><strong>{preview.trackedNewlyIgnored > 0 ? `${preview.trackedNewlyIgnored} 个已跟踪文件会在下次扫描成为删除记录` : "目录超过预览上限，结果并不完整"}</strong><p>{preview.trackedDeletionSamples.length ? preview.trackedDeletionSamples.join(" · ") : "Engine 已停止继续枚举；未展示的路径可能仍受规则影响。"}{preview.truncated ? " · 预览已截断" : ""}</p></div></div> : null}
         </section>
 
-        <footer className="ignore-dialog-footer"><div className="flex items-center gap-2"><Button variant="ghost" disabled={!editable || !policy?.canUndo || dirty || busy !== null} onClick={() => void undo()}><RotateCcw className="size-4" />撤销上一版</Button><span>{dirty ? "有未应用的更改" : "规则与磁盘一致"}</span></div><div className="flex gap-2"><Dialog.Close asChild><Button variant="secondary">关闭</Button></Dialog.Close><Button disabled={!editable || !dirty || busy !== null} className={confirmRisk ? "!bg-[#d94453]" : ""} onClick={() => void apply()}>{busy === "apply" ? <LoaderCircle className="size-4 animate-spin" /> : confirmRisk ? <AlertTriangle className="size-4" /> : <Check className="size-4" />}{confirmRisk ? "确认产生删除记录" : "预览并应用"}</Button></div></footer>
+        <footer className="ignore-dialog-footer"><div className="flex items-center gap-2"><Button variant="ghost" disabled={!editable || !policy?.canUndo || dirty || busy !== null} onClick={() => void undo()}><RotateCcw className="size-4" />撤销上一版</Button><span>{dirty ? "有未应用的更改" : "规则与磁盘一致"}</span></div><div className="flex gap-2"><Dialog.Close asChild><Button variant="secondary">关闭</Button></Dialog.Close><Button disabled={!editable || !dirty || busy !== null} className={confirmRisk ? "!bg-[#d94453]" : ""} onClick={() => void apply()}>{busy === "apply" ? <LoaderCircle className="size-4 animate-spin" /> : confirmRisk ? <AlertTriangle className="size-4" /> : <Check className="size-4" />}{confirmRisk ? "确认风险并应用" : "预览并应用"}</Button></div></footer>
       </Dialog.Content>
     </Dialog.Portal>
   </Dialog.Root>;
