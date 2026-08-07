@@ -107,6 +107,8 @@ class Database {
   void RecordVersionLineage(const VersionLineage& lineage);
   [[nodiscard]] std::optional<VersionLineage> FindVersionLineage(
       const std::string& task_id, const std::string& version_id) const;
+  [[nodiscard]] std::vector<VersionLineage> ListVersionLineage(
+      const std::string& task_id) const;
   [[nodiscard]] bool IsVersionAncestor(const std::string& task_id,
                                        const std::string& ancestor_version_id,
                                        const std::string& descendant_version_id) const;

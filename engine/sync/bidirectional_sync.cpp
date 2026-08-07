@@ -14,6 +14,7 @@
 #include <ranges>
 #include <stdexcept>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 namespace veritassync::sync {
@@ -248,13 +249,21 @@ void BidirectionalSyncNode::Send(const protocol::Channel channel, const protocol
 
 void BidirectionalSyncNode::SendManifest() {
   protocol::VersionedManifest manifest{++manifest_revision_, {}};
-  for (const auto& record : config_.database.ListFileRecords(config_.task_id)) {
-    const auto lineage = config_.database.FindVersionLineage(config_.task_id, record.version_id);
-    if (!lineage.has_value()) throw std::runtime_error("local record has no version lineage");
+  const auto records = config_.database.ListFileRecords(config_.task_id);
+  const auto lineage_rows = config_.database.ListVersionLineage(config_.task_id);
+  std::unordered_map<std::string_view, const storage::VersionLineage*> lineage_by_version;
+  lineage_by_version.reserve(lineage_rows.size());
+  for (const auto& lineage : lineage_rows) {
+    lineage_by_version.emplace(lineage.version_id, &lineage);
+  }
+  manifest.entries.reserve(records.size());
+  for (const auto& record : records) {
+    const auto lineage = lineage_by_version.find(record.version_id);
+    if (lineage == lineage_by_version.end()) throw std::runtime_error("local record has no version lineage");
     manifest.entries.push_back({record.relative_path, ToProtocolKind(record.kind), record.size,
                                 record.kind == storage::FileKind::kFile ? EncodeHash(std::span(record.content_hash)) : std::string{},
                                 record.version_id, record.origin_device_id, record.logical_clock,
-                                lineage->parent_version_id.value_or(""),
+                                lineage->second->parent_version_id.value_or(""),
                                 record.deleted_at_ms.has_value() ? std::optional<std::uint64_t>{static_cast<std::uint64_t>(*record.deleted_at_ms)} : std::nullopt});
   }
   Send(protocol::Channel::kControl, protocol::FrameType::kVersionManifest,

@@ -86,6 +86,10 @@ VSYNC_TEST(DatabasePersistsVersionLineageLamportClockAndConflicts) {
     database.RecordVersionLineage({"task-1", "v1", std::nullopt});
     database.RecordVersionLineage({"task-1", "v2", std::optional<std::string>{"v1"}});
     database.RecordVersionLineage({"task-1", "v3", std::optional<std::string>{"v2"}});
+    const auto lineage = database.ListVersionLineage("task-1");
+    VSYNC_CHECK(lineage.size() == 3);
+    VSYNC_CHECK(lineage[2].version_id == "v3");
+    VSYNC_CHECK(lineage[2].parent_version_id == std::optional<std::string>{"v2"});
     VSYNC_CHECK(database.IsVersionAncestor("task-1", "v1", "v3"));
     VSYNC_CHECK(!database.IsVersionAncestor("task-1", "v3", "v1"));
     VSYNC_CHECK_THROWS(database.RecordVersionLineage({"task-1", "v2", std::nullopt}));
@@ -96,6 +100,7 @@ VSYNC_TEST(DatabasePersistsVersionLineageLamportClockAndConflicts) {
                              "notes.conflict.device-b.8.txt", "unresolved", 1234});
     const auto conflicts = database.ListConflicts("task-1");
     VSYNC_CHECK(conflicts.size() == 1);
+    VSYNC_CHECK(database.ListConflicts().size() == 1);
     VSYNC_CHECK(conflicts[0].conflict_path == "notes.conflict.device-b.8.txt");
     database.UpdateConflictState("conflict-1", "resolved");
     VSYNC_CHECK(database.ListConflicts("task-1")[0].state == "resolved");

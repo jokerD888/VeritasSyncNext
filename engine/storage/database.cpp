@@ -442,6 +442,36 @@ std::optional<VersionLineage> Database::FindVersionLineage(const std::string& ta
   } catch (...) { cleanup(); throw; }
 }
 
+std::vector<VersionLineage> Database::ListVersionLineage(const std::string& task_id) const {
+  if (task_id.empty()) throw std::invalid_argument("version lineage task id is required");
+  constexpr const char* sql =
+      "SELECT version_id, parent_version_id FROM version_lineage WHERE task_id=? ORDER BY version_id;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_,
+        "prepare version lineage list");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_,
+          "bind version lineage list task");
+    std::vector<VersionLineage> result;
+    while (true) {
+      const int step = sqlite3_step(statement);
+      if (step == SQLITE_DONE) break;
+      Check(step, connection_, "read version lineage list");
+      VersionLineage lineage{task_id,
+                             reinterpret_cast<const char*>(sqlite3_column_text(statement, 0)),
+                             std::nullopt};
+      if (sqlite3_column_type(statement, 1) != SQLITE_NULL) {
+        lineage.parent_version_id =
+            reinterpret_cast<const char*>(sqlite3_column_text(statement, 1));
+      }
+      result.push_back(std::move(lineage));
+    }
+    cleanup();
+    return result;
+  } catch (...) { cleanup(); throw; }
+}
+
 bool Database::IsVersionAncestor(const std::string& task_id,
                                  const std::string& ancestor_version_id,
                                  const std::string& descendant_version_id) const {
