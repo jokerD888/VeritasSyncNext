@@ -84,3 +84,41 @@ VSYNC_TEST(IgnorePolicyInventoryStopsAtConfiguredFileLimit) {
   VSYNC_CHECK(context.scanned_files == 2);
   VSYNC_CHECK(context.truncated);
 }
+
+VSYNC_TEST(IgnorePolicyAppliesAtomicallyTracksExternalEditsAndSupportsUndo) {
+  TemporaryTree tree;
+  const auto database_path = std::filesystem::temp_directory_path() /
+      ("veritassync-ignore-policy-db-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  {
+    veritassync::storage::Database database(database_path);
+    database.ApplyMigrations();
+    database.CreateTask({"task-1", "one_way", "source", tree.Root().string()});
+    const auto initial = veritassync::storage::IgnorePolicy::Synchronize(
+        database, "task-1", tree.Root(), 100);
+    VSYNC_CHECK(initial.revision == 1);
+    VSYNC_CHECK(initial.rules.empty());
+
+    const auto applied = veritassync::storage::IgnorePolicy::Apply(
+        database, "task-1", tree.Root(), initial.content_hash, "*.log\n", "ai", 101);
+    VSYNC_CHECK(applied.revision == 2);
+    VSYNC_CHECK(veritassync::storage::IgnorePolicy::ReadRules(tree.Root()) == "*.log\n");
+    VSYNC_CHECK_THROWS(veritassync::storage::IgnorePolicy::Apply(
+        database, "task-1", tree.Root(), initial.content_hash, "build/\n", "ai", 102));
+
+    { std::ofstream stream(tree.Root() / ".veritasignore", std::ios::binary | std::ios::trunc); stream << "tests/\n"; }
+    const auto imported = veritassync::storage::IgnorePolicy::Synchronize(
+        database, "task-1", tree.Root(), 103);
+    VSYNC_CHECK(imported.revision == 3);
+    VSYNC_CHECK(imported.source == "manual");
+
+    const auto undone = veritassync::storage::IgnorePolicy::Undo(
+        database, "task-1", tree.Root(), imported.content_hash, 104);
+    VSYNC_CHECK(undone.revision == 4);
+    VSYNC_CHECK(undone.source == "undo");
+    VSYNC_CHECK(undone.rules == "*.log\n");
+  }
+  std::filesystem::remove(database_path);
+  std::filesystem::remove(database_path.string() + "-shm");
+  std::filesystem::remove(database_path.string() + "-wal");
+}

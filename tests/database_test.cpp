@@ -10,7 +10,7 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.ApplyMigrations();
-    VSYNC_CHECK(database.SchemaVersion() == 4);
+    VSYNC_CHECK(database.SchemaVersion() == 5);
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
     const auto task = database.FindTask("task-1");
     VSYNC_CHECK(task.has_value());
@@ -20,6 +20,32 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     VSYNC_CHECK_THROWS(database.CreateTask({"invalid-two-way", "bidirectional", "source", "C:/sync"}));
     VSYNC_CHECK(database.CountRows("tasks") == 1);
     VSYNC_CHECK(database.CountRows("file_records") == 0);
+  }
+  std::filesystem::remove(path);
+  std::filesystem::remove(path.string() + "-shm");
+  std::filesystem::remove(path.string() + "-wal");
+}
+
+VSYNC_TEST(DatabasePersistsVersionedIgnorePoliciesAndDeletesTheirHistoryWithTask) {
+  const auto path = std::filesystem::temp_directory_path() / ("veritassync-ignore-history-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  {
+    veritassync::storage::Database database(path);
+    database.ApplyMigrations();
+    database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
+    const auto first = database.RecordIgnorePolicyRevision("task-1", "*.log\n", std::string(64, '1'), "manual", 100);
+    const auto second = database.RecordIgnorePolicyRevision("task-1", "*.log\nbuild/\n", std::string(64, '2'), "ai", 101);
+    VSYNC_CHECK(first.revision == 1);
+    VSYNC_CHECK(second.revision == 2);
+    const auto current = database.CurrentIgnorePolicyRevision("task-1");
+    VSYNC_CHECK(current.has_value());
+    VSYNC_CHECK(current->content == "*.log\nbuild/\n");
+    const auto history = database.ListIgnorePolicyRevisions("task-1");
+    VSYNC_CHECK(history.size() == 2);
+    VSYNC_CHECK(history.front().source == "ai");
+    VSYNC_CHECK_THROWS(database.RecordIgnorePolicyRevision("task-1", "x", "short", "ai", 102));
+    database.DeleteTask("task-1");
+    VSYNC_CHECK(database.CountRows("ignore_policy_revisions") == 0);
+    VSYNC_CHECK(database.CountRows("ignore_policy_state") == 0);
   }
   std::filesystem::remove(path);
   std::filesystem::remove(path.string() + "-shm");

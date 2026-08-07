@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 
 namespace {
@@ -15,6 +16,17 @@ class TemporaryIpcDatabase {
  private:
   std::filesystem::path path_; std::unique_ptr<veritassync::storage::Database> database_;
 };
+
+std::string ResponseField(const std::string& response, const std::size_t index) {
+  std::size_t begin = 0;
+  for (std::size_t field = 0; field < index; ++field) {
+    begin = response.find('\t', begin);
+    if (begin == std::string::npos) return {};
+    ++begin;
+  }
+  const auto end = response.find_first_of("\t\n", begin);
+  return response.substr(begin, end == std::string::npos ? response.size() - begin : end - begin);
+}
 }
 
 VSYNC_TEST(IpcServiceCreatesListsDeletesTasksAndRejectsBadVersions) {
@@ -28,4 +40,40 @@ VSYNC_TEST(IpcServiceCreatesListsDeletesTasksAndRejectsBadVersions) {
   VSYNC_CHECK(service.Handle("VSYNC_IPC/1\tdelete_task\tdemo") == "OK\n");
   const auto events = service.Handle("VSYNC_IPC/1\tlist_events\t10");
   VSYNC_CHECK(events.find("Deleted task demo") != std::string::npos);
+}
+
+VSYNC_TEST(IpcServicePreviewsAndAppliesVersionedIgnorePoliciesForSourcesOnly) {
+  TemporaryIpcDatabase temporary;
+  const auto root = std::filesystem::temp_directory_path() /
+      ("veritassync-ipc-ignore-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(root);
+  { std::ofstream stream(root / "debug.log"); stream << "log"; }
+  { std::ofstream stream(root / "keep.txt"); stream << "keep"; }
+  temporary.Database().CreateTask({"source", "one_way", "source", root.string()});
+  temporary.Database().UpsertFileRecord({"source", "debug.log", veritassync::storage::FileKind::kFile,
+      3, 1, {1}, "v1", "device-a", 0, std::nullopt});
+  veritassync::ipc::IpcService service(temporary.Database());
+
+  const auto current = service.Handle("VSYNC_IPC/1\tignore_get\tsource");
+  VSYNC_CHECK(current.starts_with("OK\t1\t"));
+  const auto hash = ResponseField(current, 2);
+  VSYNC_CHECK(hash.size() == 64);
+  const auto preview = service.Handle("VSYNC_IPC/1\tignore_preview\tsource\t*.log%0A");
+  VSYNC_CHECK(preview.starts_with("OK\t" + hash));
+  VSYNC_CHECK(preview.find("DELETE\tdebug.log") != std::string::npos);
+  const auto applied = service.Handle(
+      "VSYNC_IPC/1\tignore_apply\tsource\t" + hash + "\t*.log%0A\tai");
+  VSYNC_CHECK(applied.starts_with("OK\t2\t"));
+  VSYNC_CHECK(std::filesystem::is_regular_file(root / ".veritasignore"));
+  VSYNC_CHECK(service.Handle(
+      "VSYNC_IPC/1\tignore_apply\tsource\t" + hash + "\tbuild/%0A\tai")
+      .starts_with("ERR\tignore policy changed"));
+
+  temporary.Database().CreateTask({"target", "one_way", "target", root.string()});
+  const auto target = service.Handle("VSYNC_IPC/1\tignore_get\ttarget");
+  const auto target_hash = ResponseField(target, 2);
+  VSYNC_CHECK(service.Handle("VSYNC_IPC/1\tignore_apply\ttarget\t" + target_hash +
+      "\t*.tmp%0A\tmanual").starts_with("ERR\tone-way target ignore policy is read-only"));
+  std::filesystem::remove_all(root);
 }

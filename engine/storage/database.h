@@ -73,6 +73,15 @@ struct EngineEvent {
   std::int64_t created_at_ms = 0;
 };
 
+struct IgnorePolicyRevision {
+  std::string task_id;
+  std::uint64_t revision = 0;
+  std::string content;
+  std::string content_hash;
+  std::string source;
+  std::int64_t created_at_ms = 0;
+};
+
 class Database {
  public:
   explicit Database(const std::filesystem::path& path);
@@ -108,6 +117,13 @@ class Database {
   void UpdateConflictState(const std::string& conflict_id, const std::string& state);
   void RecordEngineEvent(const EngineEvent& event);
   [[nodiscard]] std::vector<EngineEvent> ListEngineEvents(std::size_t limit = 200) const;
+  [[nodiscard]] IgnorePolicyRevision RecordIgnorePolicyRevision(
+      std::string task_id, std::string content, std::string content_hash,
+      std::string source, std::int64_t created_at_ms);
+  [[nodiscard]] std::optional<IgnorePolicyRevision> CurrentIgnorePolicyRevision(
+      const std::string& task_id) const;
+  [[nodiscard]] std::vector<IgnorePolicyRevision> ListIgnorePolicyRevisions(
+      const std::string& task_id, std::size_t limit = 50) const;
   void InTransaction(const std::function<void()>& operation);
   void CreateTransfer(const TransferRecord& transfer);
   void MarkTransferChunkCompleted(const TransferId& transfer_id, std::uint64_t chunk_index,

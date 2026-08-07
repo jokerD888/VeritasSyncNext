@@ -1,6 +1,8 @@
 #include "engine/storage/ignore_policy.h"
 
 #include "engine/storage/ignore_rules.h"
+#include "engine/storage/safe_file_writer.h"
+#include "engine/common/content_hash.h"
 
 #include <algorithm>
 #include <cctype>
@@ -176,6 +178,76 @@ std::string IgnorePolicy::ReadRules(const std::filesystem::path& task_root) {
   if (stream.bad()) throw std::runtime_error("cannot read .veritasignore");
   IgnoreRules::Validate(rules);
   return rules;
+}
+
+std::string IgnorePolicy::HashRules(const std::string_view rules) {
+  const auto bytes = std::span<const std::uint8_t>{
+      reinterpret_cast<const std::uint8_t*>(rules.data()), rules.size()};
+  const auto hash = common::Blake3(bytes);
+  constexpr char kHex[] = "0123456789abcdef";
+  std::string encoded;
+  encoded.reserve(hash.size() * 2U);
+  for (const auto byte : hash) {
+    encoded.push_back(kHex[byte >> 4U]);
+    encoded.push_back(kHex[byte & 0x0FU]);
+  }
+  return encoded;
+}
+
+IgnorePolicyState IgnorePolicy::Synchronize(Database& database, const std::string& task_id,
+                                            const std::filesystem::path& task_root,
+                                            const std::int64_t now_ms) {
+  if (task_id.empty() || now_ms <= 0) {
+    throw std::invalid_argument("ignore policy identity and timestamp are required");
+  }
+  if (!database.FindTask(task_id).has_value()) {
+    throw std::invalid_argument("ignore policy task does not exist");
+  }
+  const auto rules = ReadRules(task_root);
+  const auto hash = HashRules(rules);
+  auto current = database.CurrentIgnorePolicyRevision(task_id);
+  if (!current.has_value() || current->content_hash != hash || current->content != rules) {
+    current = database.RecordIgnorePolicyRevision(task_id, rules, hash, "manual", now_ms);
+  }
+  return {current->revision, current->content, current->content_hash, current->source,
+          current->created_at_ms};
+}
+
+IgnorePolicyState IgnorePolicy::Apply(Database& database, const std::string& task_id,
+                                      const std::filesystem::path& task_root,
+                                      const std::string_view expected_hash,
+                                      const std::string_view rules, std::string source,
+                                      const std::int64_t now_ms) {
+  IgnoreRules::Validate(rules);
+  if (source != "manual" && source != "ai" && source != "undo") {
+    throw std::invalid_argument("ignore policy source is invalid");
+  }
+  const auto current = Synchronize(database, task_id, task_root, now_ms);
+  if (expected_hash != current.content_hash) {
+    throw std::invalid_argument("ignore policy changed; refresh before applying");
+  }
+  if (rules == current.rules) return current;
+  const auto bytes = std::span<const std::uint8_t>{
+      reinterpret_cast<const std::uint8_t*>(rules.data()), rules.size()};
+  SafeFileWriter(task_root).WriteAtomically(".veritasignore", bytes);
+  const auto hash = HashRules(rules);
+  const auto recorded = database.RecordIgnorePolicyRevision(
+      task_id, std::string{rules}, hash, std::move(source), now_ms);
+  return {recorded.revision, recorded.content, recorded.content_hash, recorded.source,
+          recorded.created_at_ms};
+}
+
+IgnorePolicyState IgnorePolicy::Undo(Database& database, const std::string& task_id,
+                                     const std::filesystem::path& task_root,
+                                     const std::string_view expected_hash,
+                                     const std::int64_t now_ms) {
+  const auto current = Synchronize(database, task_id, task_root, now_ms);
+  if (expected_hash != current.content_hash) {
+    throw std::invalid_argument("ignore policy changed; refresh before undoing");
+  }
+  const auto history = database.ListIgnorePolicyRevisions(task_id, 2);
+  if (history.size() < 2U) throw std::invalid_argument("ignore policy has no previous revision");
+  return Apply(database, task_id, task_root, current.content_hash, history[1].content, "undo", now_ms);
 }
 
 IgnoreContext IgnorePolicy::BuildContext(const std::filesystem::path& task_root,

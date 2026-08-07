@@ -2,6 +2,7 @@
 
 #include "engine/common/uuid.h"
 #include "engine/storage/ignore_rules.h"
+#include "engine/storage/ignore_policy.h"
 #include "engine/storage/manifest_scanner.h"
 #include "engine/sync/snapshot_reconciler.h"
 #include "engine/sync/task_policy.h"
@@ -82,6 +83,22 @@ void Record(storage::Database& database, std::optional<std::string> task_id, std
   database.RecordEngineEvent({0, std::move(task_id), "info", std::move(message), NowMilliseconds()});
 }
 
+[[nodiscard]] storage::TaskDefinition RequireTask(storage::Database& database,
+                                                  const std::string& task_id) {
+  const auto task = database.FindTask(task_id);
+  if (!task.has_value()) throw std::invalid_argument("task does not exist");
+  return *task;
+}
+
+void RequireIgnorePolicyEditor(const storage::TaskDefinition& task) {
+  if (task.mode == "one_way" && task.role != "source") {
+    throw std::invalid_argument("one-way target ignore policy is read-only");
+  }
+  if (task.mode == "bidirectional") {
+    throw std::invalid_argument("bidirectional ignore policy requires peer negotiation");
+  }
+}
+
 }  // namespace
 
 IpcService::IpcService(storage::Database& database) : database_(database) {}
@@ -121,6 +138,64 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
           {fields[2], fields[3], 0, NowMilliseconds()});
       Record(database_, fields[2], "Scanned " + std::to_string(snapshot.size()) + " entries");
       return "OK\t" + std::to_string(result.created_or_changed) + "\t" + std::to_string(result.tombstoned) + "\n";
+    }
+    if (command == "ignore_get") {
+      RequireCount(fields, 3); const auto task = RequireTask(database_, fields[2]);
+      const auto policy = storage::IgnorePolicy::Synchronize(
+          database_, task.task_id, task.root_path, NowMilliseconds());
+      const bool can_undo = database_.ListIgnorePolicyRevisions(task.task_id, 2).size() > 1U;
+      return "OK\t" + std::to_string(policy.revision) + "\t" + Escape(policy.content_hash) +
+             "\t" + (can_undo ? "1" : "0") + "\t" + Escape(policy.rules) + "\n";
+    }
+    if (command == "ignore_context") {
+      RequireCount(fields, 5); const auto task = RequireTask(database_, fields[2]);
+      const auto mode = fields[4] == "private" ? storage::IgnoreContextMode::kPrivate :
+          fields[4] == "precise" ? storage::IgnoreContextMode::kPrecise :
+          throw std::invalid_argument("ignore context mode is invalid");
+      const auto context = storage::IgnorePolicy::BuildContext(task.root_path, fields[3], mode);
+      std::string response = "OK\t" + std::to_string(context.scanned_files) + "\t" +
+          (context.truncated ? "1" : "0") + "\t" + Escape(context.directory_summary) + "\n";
+      for (const auto& path : context.relevant_paths) response += "MATCH\t" + Escape(path) + "\n";
+      for (const auto& path : context.comparison_paths) response += "COMPARE\t" + Escape(path) + "\n";
+      return response + "END\n";
+    }
+    if (command == "ignore_preview") {
+      RequireCount(fields, 4); const auto task = RequireTask(database_, fields[2]);
+      const auto current = storage::IgnorePolicy::Synchronize(
+          database_, task.task_id, task.root_path, NowMilliseconds());
+      std::vector<std::string> tracked_paths;
+      for (const auto& record : database_.ListFileRecords(task.task_id)) {
+        if (record.kind == storage::FileKind::kFile) tracked_paths.push_back(record.relative_path);
+      }
+      const auto preview = storage::IgnorePolicy::Preview(
+          task.root_path, current.rules, fields[3], tracked_paths);
+      std::string response = "OK\t" + Escape(current.content_hash) + "\t" +
+          std::to_string(preview.scanned_files) + "\t" + std::to_string(preview.currently_ignored) +
+          "\t" + std::to_string(preview.proposed_ignored) + "\t" +
+          std::to_string(preview.newly_ignored) + "\t" + std::to_string(preview.newly_included) +
+          "\t" + std::to_string(preview.tracked_newly_ignored) + "\t" +
+          (preview.truncated ? "1" : "0") + "\n";
+      for (const auto& path : preview.newly_ignored_samples) response += "IGNORE\t" + Escape(path) + "\n";
+      for (const auto& path : preview.newly_included_samples) response += "INCLUDE\t" + Escape(path) + "\n";
+      for (const auto& path : preview.tracked_deletion_samples) response += "DELETE\t" + Escape(path) + "\n";
+      return response + "END\n";
+    }
+    if (command == "ignore_apply") {
+      RequireCount(fields, 6); const auto task = RequireTask(database_, fields[2]);
+      RequireIgnorePolicyEditor(task);
+      const auto policy = storage::IgnorePolicy::Apply(
+          database_, task.task_id, task.root_path, fields[3], fields[4], fields[5], NowMilliseconds());
+      Record(database_, task.task_id, "Applied ignore policy revision " + std::to_string(policy.revision));
+      return "OK\t" + std::to_string(policy.revision) + "\t" + Escape(policy.content_hash) + "\n";
+    }
+    if (command == "ignore_undo") {
+      RequireCount(fields, 4); const auto task = RequireTask(database_, fields[2]);
+      RequireIgnorePolicyEditor(task);
+      const auto policy = storage::IgnorePolicy::Undo(
+          database_, task.task_id, task.root_path, fields[3], NowMilliseconds());
+      Record(database_, task.task_id, "Restored ignore policy revision " + std::to_string(policy.revision));
+      return "OK\t" + std::to_string(policy.revision) + "\t" + Escape(policy.content_hash) +
+             "\t" + Escape(policy.rules) + "\n";
     }
     if (command == "list_conflicts") {
       RequireCount(fields, 3); std::string response;

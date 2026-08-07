@@ -84,6 +84,26 @@ CREATE TABLE engine_events (
 CREATE INDEX idx_engine_events_recent ON engine_events(event_id DESC);
 )sql";
 
+constexpr const char* kMigration5 = R"sql(
+CREATE TABLE ignore_policy_revisions (
+  task_id TEXT NOT NULL REFERENCES tasks(task_id),
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  content TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  source TEXT NOT NULL CHECK(source IN ('manual', 'ai', 'undo')),
+  created_at_ms INTEGER NOT NULL,
+  PRIMARY KEY(task_id, revision)
+);
+CREATE TABLE ignore_policy_state (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
+  revision INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  FOREIGN KEY(task_id, revision) REFERENCES ignore_policy_revisions(task_id, revision)
+);
+CREATE INDEX idx_ignore_policy_history ON ignore_policy_revisions(task_id, revision DESC);
+)sql";
+
 [[nodiscard]] const char* FileKindName(const FileKind kind) {
   switch (kind) {
     case FileKind::kFile: return "file";
@@ -178,6 +198,10 @@ void Database::ApplyMigrations() {
     Execute("BEGIN IMMEDIATE;");
     try { Execute(kMigration4); Execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES(4, unixepoch() * 1000);"); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
   }
+  if (SchemaVersion() < 5) {
+    Execute("BEGIN IMMEDIATE;");
+    try { Execute(kMigration5); Execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES(5, unixepoch() * 1000);"); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }
+  }
 }
 void Database::CreateTask(const TaskDefinition& task) {
   if (task.task_id.empty() || task.root_path.empty()) throw std::invalid_argument("task id and root path are required");
@@ -235,6 +259,7 @@ void Database::DeleteTask(const std::string& task_id) {
   constexpr const char* kSql[] = {
       "DELETE FROM transfer_chunks WHERE transfer_id IN (SELECT transfer_id FROM transfers WHERE task_id=?);",
       "DELETE FROM transfers WHERE task_id=?;", "DELETE FROM conflicts WHERE task_id=?;",
+      "DELETE FROM ignore_policy_state WHERE task_id=?;", "DELETE FROM ignore_policy_revisions WHERE task_id=?;",
       "DELETE FROM version_lineage WHERE task_id=?;", "DELETE FROM task_clocks WHERE task_id=?;",
       "DELETE FROM peer_state WHERE task_id=?;", "DELETE FROM file_records WHERE task_id=?;",
       "DELETE FROM tasks WHERE task_id=?;"};
@@ -567,6 +592,121 @@ std::vector<EngineEvent> Database::ListEngineEvents(const std::size_t limit) con
     return events;
   } catch (...) { cleanup(); throw; }
 }
+
+IgnorePolicyRevision Database::RecordIgnorePolicyRevision(
+    std::string task_id, std::string content, std::string content_hash,
+    std::string source, const std::int64_t created_at_ms) {
+  if (task_id.empty() || content.size() > 16U * 1024U || content_hash.size() != 64U ||
+      (source != "manual" && source != "ai" && source != "undo") || created_at_ms <= 0) {
+    throw std::invalid_argument("ignore policy revision is invalid");
+  }
+  IgnorePolicyRevision recorded{task_id, 0, std::move(content), std::move(content_hash),
+                                std::move(source), created_at_ms};
+  Execute("BEGIN IMMEDIATE;");
+  try {
+    sqlite3_stmt* next_statement = nullptr;
+    Check(sqlite3_prepare_v2(connection_,
+        "SELECT COALESCE(MAX(revision), 0) + 1 FROM ignore_policy_revisions WHERE task_id=?;",
+        -1, &next_statement, nullptr), connection_, "prepare ignore policy revision number");
+    Check(sqlite3_bind_text(next_statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_,
+          "bind ignore policy revision task");
+    Check(sqlite3_step(next_statement), connection_, "read ignore policy revision number");
+    const auto revision = sqlite3_column_int64(next_statement, 0);
+    sqlite3_finalize(next_statement);
+    if (revision <= 0) throw std::runtime_error("ignore policy revision overflow");
+    recorded.revision = static_cast<std::uint64_t>(revision);
+
+    sqlite3_stmt* insert = nullptr;
+    Check(sqlite3_prepare_v2(connection_,
+        "INSERT INTO ignore_policy_revisions(task_id, revision, content, content_hash, source, created_at_ms) VALUES(?, ?, ?, ?, ?, ?);",
+        -1, &insert, nullptr), connection_, "prepare ignore policy revision insert");
+    const auto finalize_insert = [&] { sqlite3_finalize(insert); };
+    try {
+      Check(sqlite3_bind_text(insert, 1, recorded.task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind ignore policy task");
+      Check(sqlite3_bind_int64(insert, 2, revision), connection_, "bind ignore policy revision");
+      Check(sqlite3_bind_text(insert, 3, recorded.content.c_str(), static_cast<int>(recorded.content.size()), SQLITE_TRANSIENT), connection_, "bind ignore policy content");
+      Check(sqlite3_bind_text(insert, 4, recorded.content_hash.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind ignore policy hash");
+      Check(sqlite3_bind_text(insert, 5, recorded.source.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind ignore policy source");
+      Check(sqlite3_bind_int64(insert, 6, recorded.created_at_ms), connection_, "bind ignore policy time");
+      Check(sqlite3_step(insert), connection_, "insert ignore policy revision");
+      finalize_insert();
+    } catch (...) { finalize_insert(); throw; }
+
+    sqlite3_stmt* state = nullptr;
+    Check(sqlite3_prepare_v2(connection_,
+        "INSERT INTO ignore_policy_state(task_id, revision, content_hash, updated_at_ms) VALUES(?, ?, ?, ?) "
+        "ON CONFLICT(task_id) DO UPDATE SET revision=excluded.revision, content_hash=excluded.content_hash, updated_at_ms=excluded.updated_at_ms;",
+        -1, &state, nullptr), connection_, "prepare ignore policy state update");
+    const auto finalize_state = [&] { sqlite3_finalize(state); };
+    try {
+      Check(sqlite3_bind_text(state, 1, recorded.task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind ignore policy state task");
+      Check(sqlite3_bind_int64(state, 2, revision), connection_, "bind ignore policy state revision");
+      Check(sqlite3_bind_text(state, 3, recorded.content_hash.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind ignore policy state hash");
+      Check(sqlite3_bind_int64(state, 4, recorded.created_at_ms), connection_, "bind ignore policy state time");
+      Check(sqlite3_step(state), connection_, "update ignore policy state");
+      finalize_state();
+    } catch (...) { finalize_state(); throw; }
+    Execute("COMMIT;");
+    return recorded;
+  } catch (...) {
+    Execute("ROLLBACK;");
+    throw;
+  }
+}
+
+std::optional<IgnorePolicyRevision> Database::CurrentIgnorePolicyRevision(
+    const std::string& task_id) const {
+  if (task_id.empty()) throw std::invalid_argument("ignore policy task is required");
+  constexpr const char* sql =
+      "SELECT r.revision, r.content, r.content_hash, r.source, r.created_at_ms "
+      "FROM ignore_policy_state s JOIN ignore_policy_revisions r "
+      "ON r.task_id=s.task_id AND r.revision=s.revision WHERE s.task_id=?;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare current ignore policy");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind current ignore policy task");
+    const auto result = sqlite3_step(statement);
+    if (result == SQLITE_DONE) { cleanup(); return std::nullopt; }
+    Check(result, connection_, "read current ignore policy");
+    IgnorePolicyRevision revision{task_id, static_cast<std::uint64_t>(sqlite3_column_int64(statement, 0)),
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 2)),
+        reinterpret_cast<const char*>(sqlite3_column_text(statement, 3)), sqlite3_column_int64(statement, 4)};
+    cleanup();
+    return revision;
+  } catch (...) { cleanup(); throw; }
+}
+
+std::vector<IgnorePolicyRevision> Database::ListIgnorePolicyRevisions(
+    const std::string& task_id, const std::size_t limit) const {
+  if (task_id.empty() || limit == 0 || limit > 200U) {
+    throw std::invalid_argument("ignore policy history request is invalid");
+  }
+  constexpr const char* sql =
+      "SELECT revision, content, content_hash, source, created_at_ms FROM ignore_policy_revisions "
+      "WHERE task_id=? ORDER BY revision DESC LIMIT ?;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare ignore policy history");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind ignore policy history task");
+    Check(sqlite3_bind_int64(statement, 2, static_cast<sqlite3_int64>(limit)), connection_, "bind ignore policy history limit");
+    std::vector<IgnorePolicyRevision> revisions;
+    while (true) {
+      const auto result = sqlite3_step(statement);
+      if (result == SQLITE_DONE) break;
+      Check(result, connection_, "read ignore policy history");
+      revisions.push_back({task_id, static_cast<std::uint64_t>(sqlite3_column_int64(statement, 0)),
+          reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+          reinterpret_cast<const char*>(sqlite3_column_text(statement, 2)),
+          reinterpret_cast<const char*>(sqlite3_column_text(statement, 3)), sqlite3_column_int64(statement, 4)});
+    }
+    cleanup();
+    return revisions;
+  } catch (...) { cleanup(); throw; }
+}
+
 void Database::InTransaction(const std::function<void()>& operation) {
   Execute("BEGIN IMMEDIATE;");
   try { operation(); Execute("COMMIT;"); } catch (...) { Execute("ROLLBACK;"); throw; }

@@ -6,6 +6,8 @@
 #include <string_view>
 #include <vector>
 
+#include "engine/storage/database.h"
+
 namespace veritassync::storage {
 
 enum class IgnoreContextMode { kPrivate, kPrecise };
@@ -31,9 +33,29 @@ struct IgnorePreview {
   std::vector<std::string> tracked_deletion_samples;
 };
 
+struct IgnorePolicyState {
+  std::uint64_t revision = 0;
+  std::string rules;
+  std::string content_hash;
+  std::string source;
+  std::int64_t created_at_ms = 0;
+};
+
 class IgnorePolicy {
  public:
   [[nodiscard]] static std::string ReadRules(const std::filesystem::path& task_root);
+  [[nodiscard]] static std::string HashRules(std::string_view rules);
+  [[nodiscard]] static IgnorePolicyState Synchronize(
+      Database& database, const std::string& task_id,
+      const std::filesystem::path& task_root, std::int64_t now_ms);
+  [[nodiscard]] static IgnorePolicyState Apply(
+      Database& database, const std::string& task_id,
+      const std::filesystem::path& task_root, std::string_view expected_hash,
+      std::string_view rules, std::string source, std::int64_t now_ms);
+  [[nodiscard]] static IgnorePolicyState Undo(
+      Database& database, const std::string& task_id,
+      const std::filesystem::path& task_root, std::string_view expected_hash,
+      std::int64_t now_ms);
   [[nodiscard]] static IgnoreContext BuildContext(
       const std::filesystem::path& task_root, std::string_view description,
       IgnoreContextMode mode, std::size_t maximum_files = 50000,
