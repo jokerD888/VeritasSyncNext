@@ -58,6 +58,11 @@ it without a device-aware I/O policy can make HDD and busy-system behavior worse
   therefore uses one named-pipe connection instead of `2N + 7` for `N` tasks
   (27 to 1 connection at ten tasks). Responses larger than 64 KiB are read in
   bounded chunks instead of being rejected.
+- Windows packaging now explicitly builds, tests, and stages the Release C++
+  sidecar. Previously the generic Debug preset path could place an unoptimized
+  engine inside an otherwise Release Tauri bundle.
+- Tauri's frontend hooks now run pnpm against the actual `desktop/ui` workspace;
+  the former working-directory mismatch prevented an integrated Release build.
 - The production React bundle is 420.10 kB JavaScript / 131.00 kB gzip and
   35.76 kB CSS / 8.10 kB gzip. At this size, code splitting would add complexity
   without addressing the measured engine/IPC bottlenecks.

@@ -61,11 +61,13 @@ Push-Location $repo
 try {
   cmake --preset default
   if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
-  cmake --build --preset default
+  cmake --build --preset default --config Release
   if ($LASTEXITCODE -ne 0) { throw "Engine build failed" }
-  ctest --preset default --output-on-failure
+  ctest --preset default -C Release --output-on-failure
   if ($LASTEXITCODE -ne 0) { throw "Engine tests failed" }
-  & (Join-Path $repo "scripts\stage-desktop-engine.ps1") -TargetTriple $TargetTriple
+  & (Join-Path $repo "scripts\stage-desktop-engine.ps1") `
+      -BuildDirectory (Join-Path $repo "build\default\Release") `
+      -TargetTriple $TargetTriple
   $template = Get-Content -LiteralPath "desktop\src-tauri\tauri.release.example.json" -Raw
   $releaseConfig = $template.Replace("__VERITASSYNC_UPDATE_ENDPOINT__", [Environment]::GetEnvironmentVariable("VERITASSYNC_UPDATE_ENDPOINT"))
   $releaseConfig = $releaseConfig.Replace("__VERITASSYNC_UPDATER_PUBKEY__", [Environment]::GetEnvironmentVariable("VERITASSYNC_UPDATER_PUBKEY"))

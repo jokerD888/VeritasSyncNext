@@ -21,12 +21,16 @@ substituted for a trusted release certificate.
 
 ```powershell
 cmake --preset default
-cmake --build --preset default
-ctest --preset default --output-on-failure
-./scripts/stage-desktop-engine.ps1
+cmake --build --preset default --config Release
+ctest --preset default -C Release --output-on-failure
+./scripts/stage-desktop-engine.ps1 -BuildDirectory ./build/default/Release
 cd desktop/src-tauri
 cargo tauri build
 ```
+
+Release packaging must explicitly stage `build/default/Release`. The default
+sidecar staging path remains Debug for `cargo tauri dev` and must not be used by
+the installer pipeline.
 
 The bundle includes the engine as a sidecar. The first shell launch starts the
 named-pipe server; later shell launches reuse it. SQLite migrations remain owned
