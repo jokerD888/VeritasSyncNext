@@ -10,7 +10,7 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [{ "title": "VeritasSync Next", "width": 1280, "height": 820, "minWidth": 960, "minHeight": 680, "resizable": true, "decorations": false, "transparent": true, "theme": "Dark", "backgroundColor": "#00000000", "windowEffects": { "effects": ["mica"] } }],
+    "windows": [{ "title": "VeritasSync Next", "width": 1280, "height": 820, "minWidth": 960, "minHeight": 680, "resizable": true, "decorations": false, "theme": "Dark", "backgroundColor": "#0B1020" }],
     "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:;" }
   },
   "plugins": {

@@ -5,7 +5,7 @@ import {
   sendNotification
 } from "@tauri-apps/plugin-notification";
 import { load } from "@tauri-apps/plugin-store";
-import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type ColorMode = "dark" | "light" | "system";
 export type ResolvedTheme = Exclude<ColorMode, "system">;
@@ -43,11 +43,7 @@ export async function applyColorMode(mode: ColorMode): Promise<ResolvedTheme> {
   const theme = resolveTheme(mode);
   document.documentElement.dataset.theme = theme;
   try {
-    const currentWindow = getCurrentWindow();
-    await currentWindow.setTheme(mode === "system" ? null : mode);
-    // Tauri's JavaScript enum currently exposes system Mica but not its
-    // light/dark variants even though the native configuration accepts them.
-    await currentWindow.setEffects({ effects: [(theme === "dark" ? "micaDark" : "micaLight") as Effect] });
+    await getCurrentWindow().setTheme(mode === "system" ? null : mode);
   } catch {
     // Browser-based UI tests do not expose a native window; CSS still updates.
   }
