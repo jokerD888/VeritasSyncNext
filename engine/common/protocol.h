@@ -30,6 +30,14 @@ struct Frame {
   std::vector<std::uint8_t> payload;
 };
 
+// Non-owning decode result for transport receive paths. The payload remains
+// valid only while the original wire buffer is alive.
+struct FrameView {
+  FrameType type;
+  std::uint64_t request_id;
+  std::span<const std::uint8_t> payload;
+};
+
 struct Hello {
   std::string task_id;
   Role role;
@@ -65,6 +73,7 @@ struct Cancel { std::array<std::uint8_t, 16> transfer_id; std::string reason; };
 [[nodiscard]] bool IsAllowedOn(Channel channel, FrameType type);
 [[nodiscard]] std::vector<std::uint8_t> EncodeFrame(const Frame& frame);
 [[nodiscard]] Frame DecodeFrame(std::span<const std::uint8_t> wire);
+[[nodiscard]] FrameView DecodeFrameView(std::span<const std::uint8_t> wire);
 [[nodiscard]] std::vector<std::uint8_t> EncodeHello(const Hello& hello);
 [[nodiscard]] Hello DecodeHello(std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> EncodeManifest(const Manifest& manifest);
@@ -72,6 +81,8 @@ struct Cancel { std::array<std::uint8_t, 16> transfer_id; std::string reason; };
 [[nodiscard]] std::vector<std::uint8_t> EncodeVersionedManifest(const VersionedManifest& manifest);
 [[nodiscard]] VersionedManifest DecodeVersionedManifest(std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> EncodeChunk(const Chunk& chunk);
+[[nodiscard]] std::vector<std::uint8_t> EncodeChunkFrame(const Chunk& chunk,
+                                                         std::uint64_t request_id);
 [[nodiscard]] Chunk DecodeChunk(std::span<const std::uint8_t> payload);
 [[nodiscard]] std::vector<std::uint8_t> EncodeFileRequest(const FileRequest& request);
 [[nodiscard]] FileRequest DecodeFileRequest(std::span<const std::uint8_t> payload);

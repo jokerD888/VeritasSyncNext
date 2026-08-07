@@ -30,6 +30,26 @@ VSYNC_TEST(ProtocolRejectsMalformedAndTamperedChunks) {
   VSYNC_CHECK_THROWS(DecodeChunk(payload));
 }
 
+VSYNC_TEST(ProtocolChunkFrameFastPathMatchesRegularEnvelope) {
+  using namespace veritassync::protocol;
+  Chunk expected{};
+  expected.transfer_id[0] = 3;
+  expected.file_hash[0] = 7;
+  expected.offset = 4096;
+  expected.bytes = {1, 2, 3, 4};
+  expected.chunk_hash = TestHash(expected.bytes);
+
+  const auto wire = EncodeChunkFrame(expected, 99);
+  const auto frame = DecodeFrameView(wire);
+  const auto actual = DecodeChunk(frame.payload);
+  VSYNC_CHECK(frame.type == FrameType::kChunk);
+  VSYNC_CHECK(frame.request_id == 99);
+  VSYNC_CHECK(actual.transfer_id == expected.transfer_id);
+  VSYNC_CHECK(actual.file_hash == expected.file_hash);
+  VSYNC_CHECK(actual.offset == expected.offset);
+  VSYNC_CHECK(actual.bytes == expected.bytes);
+}
+
 VSYNC_TEST(ProtocolRoundTripsOrderedMissingChunkRanges) {
   veritassync::protocol::FileRequest request{}; request.transfer_id[0] = 1; request.file_hash[0] = 2; request.missing_ranges = {{0, 2}, {5, 3}};
   const auto decoded = veritassync::protocol::DecodeFileRequest(veritassync::protocol::EncodeFileRequest(request));

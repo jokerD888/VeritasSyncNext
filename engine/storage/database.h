@@ -10,6 +10,7 @@
 #include <vector>
 
 struct sqlite3;
+struct sqlite3_stmt;
 
 namespace veritassync::storage {
 
@@ -144,6 +145,7 @@ class Database {
  private:
   void Execute(const char* sql) const;
   sqlite3* connection_ = nullptr;
+  sqlite3_stmt* upsert_file_record_ = nullptr;
 };
 
 }  // namespace veritassync::storage

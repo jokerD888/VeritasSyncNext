@@ -35,7 +35,7 @@ void Phase0Node::Send(protocol::Channel channel, protocol::FrameType type, std::
 void Phase0Node::SendManifest() { if (!manifest_sent_) { manifest_sent_ = true; Send(protocol::Channel::kControl, protocol::FrameType::kManifest, protocol::EncodeManifest(local_manifest_)); } }
 void Phase0Node::Receive(protocol::Channel channel, std::vector<std::uint8_t> wire) {
   try {
-    const auto frame = protocol::DecodeFrame(wire);
+    const auto frame = protocol::DecodeFrameView(wire);
     if (!protocol::IsAllowedOn(channel, frame.type)) throw std::invalid_argument("wrong_channel");
     if (frame.type == protocol::FrameType::kHello) {
       const auto hello = protocol::DecodeHello(frame.payload);

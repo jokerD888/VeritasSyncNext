@@ -18,8 +18,7 @@ std::optional<transport::PendingSend> UploadSession::NextForTransport(const std:
   ++range.first_chunk;
   --range.chunk_count;
   if (range.chunk_count == 0) requested_ranges_.pop_front();
-  auto wire = protocol::EncodeFrame(
-      {protocol::FrameType::kChunk, next_request_id_++, protocol::EncodeChunk(chunk)});
+  auto wire = protocol::EncodeChunkFrame(chunk, next_request_id_++);
   scheduler_.Enqueue({protocol::Channel::kBulk, transport::SendPriority::kBulk, std::move(wire)});
   return scheduler_.Next(buffered_bytes);
 }

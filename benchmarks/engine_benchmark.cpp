@@ -112,7 +112,7 @@ void BenchmarkSnapshotReconcile(const std::size_t count) {
   database.InTransaction([&] {
     for (const auto& record : records) database.UpsertFileRecord(record);
   });
-  const auto snapshot = MakeSnapshot(count);
+  auto snapshot = MakeSnapshot(count);
   std::size_t version = count;
   const auto milliseconds = MeasureMilliseconds([&] {
     const auto result = veritassync::sync::SnapshotReconciler(
@@ -123,6 +123,16 @@ void BenchmarkSnapshotReconcile(const std::size_t count) {
     }
   });
   Report("snapshot_reconcile_unchanged", count, milliseconds);
+  for (auto& entry : snapshot) entry.content_hash->front() ^= 0xffU;
+  const auto changed_ms = MeasureMilliseconds([&] {
+    const auto result = veritassync::sync::SnapshotReconciler(
+        [&] { return "changed-version-" + std::to_string(++version); })
+                            .Apply(database, snapshot, {"benchmark", "device-a", 2, 1001});
+    if (result.created_or_changed != count || result.tombstoned != 0) {
+      throw std::runtime_error("changed reconciliation benchmark missed changes");
+    }
+  });
+  Report("snapshot_reconcile_changed", count, changed_ms);
 }
 
 void BenchmarkScheduler(const std::size_t count) {
@@ -179,10 +189,8 @@ void BenchmarkChunkCodec(const std::size_t count) {
   const auto milliseconds = MeasureMilliseconds([&] {
     for (std::size_t index = 0; index < count; ++index) {
       chunk.offset = index * veritassync::protocol::kLogicalChunkSize;
-      auto wire = veritassync::protocol::EncodeFrame(
-          {veritassync::protocol::FrameType::kChunk, index,
-           veritassync::protocol::EncodeChunk(chunk)});
-      auto frame = veritassync::protocol::DecodeFrame(wire);
+      auto wire = veritassync::protocol::EncodeChunkFrame(chunk, index);
+      auto frame = veritassync::protocol::DecodeFrameView(wire);
       decoded_bytes += veritassync::protocol::DecodeChunk(frame.payload).bytes.size();
     }
   });

@@ -120,6 +120,7 @@ void MultiTargetSource::RefreshSource() {
     source_files_.push_back({config_.task_root / std::filesystem::path(entry.relative_path),
                              *entry.content_hash});
   }
+  std::ranges::sort(source_files_, {}, &SourceFile::hash);
   for (auto& peer : peers_) {
     if (peer->received_hello) SendManifest(*peer);
   }
@@ -180,7 +181,7 @@ void MultiTargetSource::Receive(Peer& peer, const protocol::Channel channel,
   std::scoped_lock lock(mutex_);
   try {
     if (channel == protocol::Channel::kControl) peer.statistics.control_bytes_received += wire.size();
-    const auto frame = protocol::DecodeFrame(wire);
+    const auto frame = protocol::DecodeFrameView(wire);
     if (!protocol::IsAllowedOn(channel, frame.type)) throw std::invalid_argument("wrong_channel");
     if (frame.type == protocol::FrameType::kHello) {
       const auto hello = protocol::DecodeHello(frame.payload);
@@ -231,10 +232,8 @@ void MultiTargetSource::SendManifest(Peer& peer) {
 }
 
 void MultiTargetSource::HandleFileRequest(Peer& peer, const protocol::FileRequest& request) {
-  const auto source = std::ranges::find_if(source_files_, [&](const SourceFile& file) {
-    return file.hash == request.file_hash;
-  });
-  if (source == source_files_.end()) {
+  const auto source = std::ranges::lower_bound(source_files_, request.file_hash, {}, &SourceFile::hash);
+  if (source == source_files_.end() || source->hash != request.file_hash) {
     Send(peer, protocol::Channel::kControl, protocol::FrameType::kCancel,
          protocol::EncodeCancel({request.transfer_id, "source_missing"}));
     return;

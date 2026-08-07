@@ -148,6 +148,7 @@ void OneWaySyncNode::RefreshSource() {
     source_files_.push_back({config_.task_root / std::filesystem::path(entry.relative_path),
                              *entry.content_hash});
   }
+  std::ranges::sort(source_files_, {}, &SourceFile::hash);
   if (received_hello_) SendManifest();
 }
 
@@ -160,7 +161,7 @@ void OneWaySyncNode::Pump() {
   for (auto it = uploads_.begin(); it != uploads_.end();) {
     const auto next = it->session->NextForTransport(transport_.BufferedAmount(protocol::Channel::kBulk));
     if (next.has_value()) {
-      const auto frame = protocol::DecodeFrame(next->wire);
+      const auto frame = protocol::DecodeFrameView(next->wire);
       if (frame.type != protocol::FrameType::kChunk) throw std::logic_error("upload scheduler emitted a non-chunk frame");
       ++statistics_.chunks_sent;
       statistics_.bulk_bytes_sent += next->wire.size();
@@ -222,7 +223,7 @@ void OneWaySyncNode::Receive(const protocol::Channel channel, std::vector<std::u
   try {
     if (channel == protocol::Channel::kControl) statistics_.control_bytes_received += wire.size();
     else statistics_.bulk_bytes_received += wire.size();
-    const auto frame = protocol::DecodeFrame(wire);
+    const auto frame = protocol::DecodeFrameView(wire);
     if (!protocol::IsAllowedOn(channel, frame.type)) {
       throw std::invalid_argument("wrong_channel");
     }
@@ -383,10 +384,8 @@ void OneWaySyncNode::BeginDownload(const protocol::ManifestEntry& entry) {
 }
 
 void OneWaySyncNode::HandleFileRequest(const protocol::FileRequest& request) {
-  const auto source = std::ranges::find_if(source_files_, [&](const SourceFile& file) {
-    return file.hash == request.file_hash;
-  });
-  if (source == source_files_.end()) {
+  const auto source = std::ranges::lower_bound(source_files_, request.file_hash, {}, &SourceFile::hash);
+  if (source == source_files_.end() || source->hash != request.file_hash) {
     Send(protocol::Channel::kControl, protocol::FrameType::kCancel,
          protocol::EncodeCancel({request.transfer_id, "source_missing"}));
     return;

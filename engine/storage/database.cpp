@@ -178,7 +178,10 @@ Database::Database(const std::filesystem::path& path) {
   Execute("PRAGMA foreign_keys=ON;");
   Execute("PRAGMA busy_timeout=5000;");
 }
-Database::~Database() { if (connection_ != nullptr) sqlite3_close(connection_); }
+Database::~Database() {
+  if (upsert_file_record_ != nullptr) sqlite3_finalize(upsert_file_record_);
+  if (connection_ != nullptr) sqlite3_close(connection_);
+}
 void Database::Execute(const char* sql) const { char* message = nullptr; const int rc = sqlite3_exec(connection_, sql, nullptr, nullptr, &message); if (rc != SQLITE_OK) { std::string detail = message == nullptr ? sqlite3_errmsg(connection_) : message; sqlite3_free(message); throw std::runtime_error(detail); } }
 void Database::ApplyMigrations() {
   Execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at_ms INTEGER NOT NULL);");
@@ -286,9 +289,15 @@ ON CONFLICT(task_id, relative_path) DO UPDATE SET
   version_id=excluded.version_id, origin_device_id=excluded.origin_device_id, logical_clock=excluded.logical_clock,
   deleted_at_ms=excluded.deleted_at_ms;
 )sql";
-  sqlite3_stmt* statement = nullptr;
-  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_, "prepare file record upsert");
-  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  if (upsert_file_record_ == nullptr) {
+    Check(sqlite3_prepare_v2(connection_, sql, -1, &upsert_file_record_, nullptr), connection_,
+          "prepare file record upsert");
+  }
+  auto* const statement = upsert_file_record_;
+  const auto reset = [&] {
+    (void)sqlite3_reset(statement);
+    (void)sqlite3_clear_bindings(statement);
+  };
   try {
     Check(sqlite3_bind_text(statement, 1, record.task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind file task");
     Check(sqlite3_bind_text(statement, 2, record.relative_path.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind file path");
@@ -309,8 +318,9 @@ ON CONFLICT(task_id, relative_path) DO UPDATE SET
       Check(sqlite3_bind_null(statement, 10), connection_, "bind live record");
     }
     Check(sqlite3_step(statement), connection_, "upsert file record");
-    cleanup();
-  } catch (...) { cleanup(); throw; }
+    Check(sqlite3_reset(statement), connection_, "reset file record upsert");
+    Check(sqlite3_clear_bindings(statement), connection_, "clear file record upsert");
+  } catch (...) { reset(); throw; }
 }
 void Database::RecordTombstone(std::string task_id, std::string relative_path,
                                std::string version_id, std::string origin_device_id,

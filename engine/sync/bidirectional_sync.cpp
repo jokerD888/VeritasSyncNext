@@ -96,8 +96,8 @@ constexpr std::size_t kPersistBatchBytes = 8U * 1024U * 1024U;
   const auto kind = entry.kind == storage::SnapshotKind::kFile ? storage::FileKind::kFile : storage::FileKind::kDirectory;
   if (kind != record.kind || entry.size != record.size) return false;
   if (kind == storage::FileKind::kDirectory) return true;
-  return entry.content_hash.has_value() &&
-         record.content_hash == std::vector<std::uint8_t>(entry.content_hash->begin(), entry.content_hash->end());
+  return entry.content_hash.has_value() && record.content_hash.size() == entry.content_hash->size() &&
+         std::equal(entry.content_hash->begin(), entry.content_hash->end(), record.content_hash.begin());
 }
 }
 
@@ -146,24 +146,33 @@ void BidirectionalSyncNode::RefreshLocal() {
     return IsConflictPath(entry.relative_path);
   }), snapshot.end());
   const auto known = config_.database.ListFileRecords(config_.task_id);
+  std::size_t known_index = 0;
   for (const auto& entry : snapshot) {
-    const auto previous = std::ranges::find_if(known, [&](const storage::FileRecord& record) {
-      return record.relative_path == entry.relative_path;
-    });
-    if (previous != known.end() && SameSnapshot(entry, *previous)) continue;
+    while (known_index < known.size() && known[known_index].relative_path < entry.relative_path) {
+      ++known_index;
+    }
+    const auto* previous = known_index < known.size() &&
+                                   known[known_index].relative_path == entry.relative_path
+                               ? &known[known_index]
+                               : nullptr;
+    if (previous != nullptr && SameSnapshot(entry, *previous)) continue;
     const auto clock = config_.database.AdvanceLogicalClock(config_.task_id);
     storage::FileRecord record{config_.task_id, entry.relative_path,
                                entry.kind == storage::SnapshotKind::kFile ? storage::FileKind::kFile : storage::FileKind::kDirectory,
                                entry.size, entry.mtime_ns, {}, common::NewUuidV4(), config_.device_id, clock, std::nullopt};
     if (entry.content_hash.has_value()) record.content_hash.assign(entry.content_hash->begin(), entry.content_hash->end());
     config_.database.RecordVersionLineage({config_.task_id, record.version_id,
-                                           previous == known.end() ? std::nullopt : std::optional<std::string>{previous->version_id}});
+                                           previous == nullptr ? std::nullopt : std::optional<std::string>{previous->version_id}});
     config_.database.UpsertFileRecord(record);
   }
+  std::size_t snapshot_index = 0;
   for (const auto& record : known) {
-    const bool exists = std::ranges::any_of(snapshot, [&](const storage::SnapshotEntry& entry) {
-      return entry.relative_path == record.relative_path;
-    });
+    while (snapshot_index < snapshot.size() &&
+           snapshot[snapshot_index].relative_path < record.relative_path) {
+      ++snapshot_index;
+    }
+    const bool exists = snapshot_index < snapshot.size() &&
+                        snapshot[snapshot_index].relative_path == record.relative_path;
     if (record.kind == storage::FileKind::kTombstone || exists) continue;
     const auto clock = config_.database.AdvanceLogicalClock(config_.task_id);
     const auto version = common::NewUuidV4();
@@ -177,6 +186,7 @@ void BidirectionalSyncNode::RefreshLocal() {
       source_files_.push_back({config_.task_root / std::filesystem::path(entry.relative_path), *entry.content_hash});
     }
   }
+  std::ranges::sort(source_files_, {}, &SourceFile::hash);
   if (received_hello_) SendManifest();
 }
 
@@ -203,7 +213,7 @@ std::size_t BidirectionalSyncNode::PendingDownloadCount() const { std::scoped_lo
 void BidirectionalSyncNode::Receive(const protocol::Channel channel, std::vector<std::uint8_t> wire) {
   std::scoped_lock lock(mutex_);
   try {
-    const auto frame = protocol::DecodeFrame(wire);
+    const auto frame = protocol::DecodeFrameView(wire);
     if (!protocol::IsAllowedOn(channel, frame.type)) throw std::invalid_argument("wrong_channel");
     if (frame.type == protocol::FrameType::kHello) {
       const auto hello = protocol::DecodeHello(frame.payload);
@@ -367,8 +377,8 @@ void BidirectionalSyncNode::CommitDownload(ActiveDownload& download) {
 }
 
 void BidirectionalSyncNode::HandleFileRequest(const protocol::FileRequest& request) {
-  const auto source = std::ranges::find_if(source_files_, [&](const SourceFile& file) { return file.hash == request.file_hash; });
-  if (source == source_files_.end()) {
+  const auto source = std::ranges::lower_bound(source_files_, request.file_hash, {}, &SourceFile::hash);
+  if (source == source_files_.end() || source->hash != request.file_hash) {
     Send(protocol::Channel::kControl, protocol::FrameType::kCancel,
          protocol::EncodeCancel({request.transfer_id, "source_missing"}));
     return;
