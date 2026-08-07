@@ -11,7 +11,7 @@
   "app": {
     "withGlobalTauri": true,
     "windows": [{ "title": "VeritasSync Next", "width": 1280, "height": 820, "minWidth": 960, "minHeight": 680, "resizable": true, "decorations": false, "theme": "Dark", "backgroundColor": "#0B1020" }],
-    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:;" }
+    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:;" }
   },
   "plugins": {
     "updater": { "endpoints": [], "pubkey": "" }
@@ -21,7 +21,7 @@
     "icon": ["icons/icon.ico"],
     "targets": ["msi", "nsis"],
     "externalBin": ["binaries/veritassync-engine"],
-    "resources": ["resources/engine"],
+    "resources": ["resources/engine", "resources/licenses"],
     "windows": { "wix": { "language": ["zh-CN"] } }
   }
 }
