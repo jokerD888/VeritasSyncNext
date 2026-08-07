@@ -36,6 +36,27 @@ export interface ScanResult {
   deleted: number;
 }
 
+export interface IgnorePolicyState {
+  revision: number;
+  hash: string;
+  canUndo: boolean;
+  rules: string;
+}
+
+export interface IgnorePreview {
+  expectedHash: string;
+  scannedFiles: number;
+  currentlyIgnored: number;
+  proposedIgnored: number;
+  newlyIgnored: number;
+  newlyIncluded: number;
+  trackedNewlyIgnored: number;
+  truncated: boolean;
+  newlyIgnoredSamples: string[];
+  newlyIncludedSamples: string[];
+  trackedDeletionSamples: string[];
+}
+
 const decodeField = (field: string) => field.replace(/%([0-9a-f]{2})/gi, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
 
 export function frameLines(reply: string): string[] {
@@ -95,6 +116,45 @@ export function parseScanResult(reply: string): ScanResult {
   return { changed: Number(fields[1]), deleted: Number(fields[2]) };
 }
 
+export function parseIgnorePolicy(reply: string): IgnorePolicyState {
+  const fields = responseFields(reply);
+  if (fields[0] !== "OK" || fields.length !== 5) throw new Error("引擎返回了无效的忽略规则状态");
+  return { revision: Number(fields[1]), hash: fields[2], canUndo: fields[3] === "1", rules: fields[4] };
+}
+
+export function parseIgnorePreview(reply: string): IgnorePreview {
+  const fields = responseFields(reply);
+  if (fields[0] !== "OK" || fields.length !== 9) throw new Error("引擎返回了无效的忽略规则预览");
+  const preview: IgnorePreview = {
+    expectedHash: fields[1],
+    scannedFiles: Number(fields[2]),
+    currentlyIgnored: Number(fields[3]),
+    proposedIgnored: Number(fields[4]),
+    newlyIgnored: Number(fields[5]),
+    newlyIncluded: Number(fields[6]),
+    trackedNewlyIgnored: Number(fields[7]),
+    truncated: fields[8] === "1",
+    newlyIgnoredSamples: [],
+    newlyIncludedSamples: [],
+    trackedDeletionSamples: []
+  };
+  for (const line of frameLines(reply).slice(1)) {
+    const [kind, rawPath = ""] = line.split("\t");
+    const path = decodeField(rawPath);
+    if (kind === "IGNORE") preview.newlyIgnoredSamples.push(path);
+    else if (kind === "INCLUDE") preview.newlyIncludedSamples.push(path);
+    else if (kind === "DELETE") preview.trackedDeletionSamples.push(path);
+    else if (kind !== "END") throw new Error("引擎返回了未知的忽略规则预览行");
+  }
+  return preview;
+}
+
+export function parseAppliedIgnorePolicy(reply: string): Pick<IgnorePolicyState, "revision" | "hash"> {
+  const fields = responseFields(reply);
+  if (fields[0] !== "OK" || fields.length < 3) throw new Error("引擎返回了无效的忽略规则应用结果");
+  return { revision: Number(fields[1]), hash: fields[2] };
+}
+
 const request = (command: string, args: string[] = []) => invoke<string>("ipc_request", { command, args });
 
 export const engine = {
@@ -106,5 +166,13 @@ export const engine = {
   createTask: (task: Pick<SyncTask, "id" | "mode" | "role" | "root">) => request("create_task", [task.id, task.mode, task.role, task.root]),
   deleteTask: (taskId: string) => request("delete_task", [taskId]),
   scanTask: async (taskId: string) => parseScanResult(await request("scan_task", [taskId, "desktop-local"])),
-  resolveConflict: (conflictId: string) => request("resolve_conflict", [conflictId])
+  resolveConflict: (conflictId: string) => request("resolve_conflict", [conflictId]),
+  ignoreRules: async (taskId: string) => parseIgnorePolicy(await request("ignore_get", [taskId])),
+  previewIgnoreRules: async (taskId: string, rules: string) => parseIgnorePreview(await request("ignore_preview", [taskId, rules])),
+  applyIgnoreRules: async (taskId: string, expectedHash: string, rules: string, source: "manual" | "ai") =>
+    parseAppliedIgnorePolicy(await request("ignore_apply", [taskId, expectedHash, rules, source])),
+  undoIgnoreRules: async (taskId: string, expectedHash: string) => {
+    await request("ignore_undo", [taskId, expectedHash]);
+    return parseIgnorePolicy(await request("ignore_get", [taskId]));
+  }
 };

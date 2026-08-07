@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { frameRows, parseEvents, parseStatus, parseTasks } from "./ipc";
+import { frameRows, parseEvents, parseIgnorePolicy, parseIgnorePreview, parseStatus, parseTasks } from "./ipc";
 
 describe("IPC text frame adapter", () => {
   it("keeps row parsing independent from newlines and terminal END frames", () => {
@@ -13,5 +13,15 @@ describe("IPC text frame adapter", () => {
   it("maps task and event rows to typed records", () => {
     expect(parseTasks("ROW\tphoto\tbidirectional\tpeer\tD:%5CPhotos\nEND\n")[0]).toMatchObject({ id: "photo", mode: "bidirectional", role: "peer" });
     expect(parseEvents("ROW\t8\tphoto\twarning\tScan%20delayed\t1700000000000\nEND\n")[0]).toMatchObject({ id: "8", taskId: "photo", level: "warning", message: "Scan delayed" });
+  });
+
+  it("parses versioned ignore policy and risk preview frames", () => {
+    expect(parseIgnorePolicy("OK\t2\tabc\t1\t*.log%0Abuild%2F%0A\n")).toEqual({
+      revision: 2, hash: "abc", canUndo: true, rules: "*.log\nbuild/\n"
+    });
+    expect(parseIgnorePreview("OK\tabc\t20\t1\t3\t2\t0\t1\t0\nIGNORE\tcache%2Fa.bin\nDELETE\tlogs%2Fold.log\nEND\n")).toMatchObject({
+      expectedHash: "abc", scannedFiles: 20, newlyIgnored: 2, trackedNewlyIgnored: 1,
+      newlyIgnoredSamples: ["cache/a.bin"], trackedDeletionSamples: ["logs/old.log"]
+    });
   });
 });
