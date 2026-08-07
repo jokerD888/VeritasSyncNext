@@ -37,6 +37,7 @@ VSYNC_TEST(IpcServiceCreatesListsDeletesTasksAndRejectsBadVersions) {
   VSYNC_CHECK(service.Handle("VSYNC_IPC/1\tcreate_task\tdemo\tone_way\tsource\tC:/sync") == "OK\n");
   const auto tasks = service.Handle("VSYNC_IPC/1\tlist_tasks");
   VSYNC_CHECK(tasks.find("ROW\tdemo\tone_way\tsource\tC:/sync") != std::string::npos);
+  VSYNC_CHECK(service.Handle("VSYNC_IPC/1\tlist_conflicts") == "END\n");
   VSYNC_CHECK(service.Handle("VSYNC_IPC/1\tdelete_task\tdemo") == "OK\n");
   const auto events = service.Handle("VSYNC_IPC/1\tlist_events\t10");
   VSYNC_CHECK(events.find("Deleted task demo") != std::string::npos);

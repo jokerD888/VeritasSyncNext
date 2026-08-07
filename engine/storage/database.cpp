@@ -539,6 +539,31 @@ std::vector<ConflictRecord> Database::ListConflicts(const std::string& task_id) 
   } catch (...) { cleanup(); throw; }
 }
 
+std::vector<ConflictRecord> Database::ListConflicts() const {
+  constexpr const char* sql = "SELECT conflict_id, task_id, original_path, winning_version_id, conflict_path, state, created_at_ms FROM conflicts ORDER BY created_at_ms, conflict_id;";
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, sql, -1, &statement, nullptr), connection_,
+        "prepare all conflicts list");
+  const auto cleanup = [&] { sqlite3_finalize(statement); };
+  try {
+    std::vector<ConflictRecord> result;
+    while (true) {
+      const int step = sqlite3_step(statement);
+      if (step == SQLITE_DONE) break;
+      Check(step, connection_, "read all conflict records");
+      result.push_back({reinterpret_cast<const char*>(sqlite3_column_text(statement, 0)),
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 1)),
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 2)),
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 3)),
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 4)),
+                        reinterpret_cast<const char*>(sqlite3_column_text(statement, 5)),
+                        sqlite3_column_int64(statement, 6)});
+    }
+    cleanup();
+    return result;
+  } catch (...) { cleanup(); throw; }
+}
+
 void Database::UpdateConflictState(const std::string& conflict_id, const std::string& state) {
   if (conflict_id.empty() || (state != "unresolved" && state != "resolved")) {
     throw std::invalid_argument("conflict state update is invalid");

@@ -113,7 +113,7 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
     if (command == "status") {
       RequireCount(fields, 2);
       return "OK\t" + std::to_string(database_.SchemaVersion()) + "\t" +
-             std::to_string(database_.ListTasks().size()) + "\n";
+             std::to_string(database_.CountRows("tasks")) + "\n";
     }
     if (command == "list_tasks") {
       RequireCount(fields, 2); std::string response;
@@ -198,8 +198,13 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
              "\t" + Escape(policy.rules) + "\n";
     }
     if (command == "list_conflicts") {
-      RequireCount(fields, 3); std::string response;
-      for (const auto& conflict : database_.ListConflicts(fields[2])) response += "ROW\t" + Escape(conflict.conflict_id) + "\t" + Escape(conflict.state) + "\t" + Escape(conflict.original_path) + "\t" + Escape(conflict.conflict_path) + "\t" + Escape(conflict.winning_version_id) + "\n";
+      if (fields.size() != 2U && fields.size() != 3U) {
+        throw std::invalid_argument("invalid IPC field count");
+      }
+      std::string response;
+      const auto conflicts = fields.size() == 3U ? database_.ListConflicts(fields[2])
+                                                 : database_.ListConflicts();
+      for (const auto& conflict : conflicts) response += "ROW\t" + Escape(conflict.conflict_id) + "\t" + Escape(conflict.state) + "\t" + Escape(conflict.original_path) + "\t" + Escape(conflict.conflict_path) + "\t" + Escape(conflict.winning_version_id) + "\n";
       return response + "END\n";
     }
     if (command == "resolve_conflict") {

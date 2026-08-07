@@ -114,6 +114,7 @@ class Database {
   [[nodiscard]] std::uint64_t AdvanceLogicalClock(const std::string& task_id,
                                                    std::uint64_t observed_remote_clock = 0);
   void RecordConflict(const ConflictRecord& conflict);
+  [[nodiscard]] std::vector<ConflictRecord> ListConflicts() const;
   [[nodiscard]] std::vector<ConflictRecord> ListConflicts(const std::string& task_id) const;
   void UpdateConflictState(const std::string& conflict_id, const std::string& state);
   void RecordEngineEvent(const EngineEvent& event);

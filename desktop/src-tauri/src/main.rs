@@ -119,7 +119,10 @@ fn ensure_engine(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn engine_request(app: &AppHandle, command: &str, args: &[String]) -> Result<String, String> {
-    let runtime = ensure(&app)?;
+    // Normal requests are themselves a health probe. Avoid an extra ping and
+    // named-pipe connection before every UI command; only enter the serialized
+    // probe/spawn path when the real request fails.
+    let runtime = runtime(&app)?;
     let finish = |response: String| {
         if response.starts_with("ERR\t") {
             Err(response[4..].trim().to_string())

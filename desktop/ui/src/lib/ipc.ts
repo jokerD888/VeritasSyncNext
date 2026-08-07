@@ -166,7 +166,7 @@ export const engine = {
   status: async () => parseStatus(await request("status")),
   tasks: async () => parseTasks(await request("list_tasks")),
   events: async (limit = 100) => parseEvents(await request("list_events", [String(limit)])),
-  conflicts: async (taskId: string) => parseConflicts(await request("list_conflicts", [taskId])),
+  conflicts: async (taskId?: string) => parseConflicts(await request("list_conflicts", taskId ? [taskId] : [])),
   createTask: (task: Pick<SyncTask, "id" | "mode" | "role" | "root">) => request("create_task", [task.id, task.mode, task.role, task.root]),
   deleteTask: (taskId: string) => request("delete_task", [taskId]),
   scanTask: async (taskId: string) => parseScanResult(await request("scan_task", [taskId, "desktop-local"])),
