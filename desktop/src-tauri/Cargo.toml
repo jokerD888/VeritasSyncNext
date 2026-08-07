@@ -26,3 +26,13 @@ zeroize = "1"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+# The shell is mostly orchestration around WebView2 and the independent C++
+# engine. Optimize its distributable for size while retaining ThinLTO's useful
+# cross-crate dead-code elimination without the cost of full LTO.
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

@@ -63,6 +63,9 @@ it without a device-aware I/O policy can make HDD and busy-system behavior worse
   engine inside an otherwise Release Tauri bundle.
 - Tauri's frontend hooks now run pnpm against the actual `desktop/ui` workspace;
   the former working-directory mismatch prevented an integrated Release build.
+- The Rust desktop Release profile uses size optimization, ThinLTO, one codegen
+  unit, abort-on-panic, and symbol stripping. On the audit machine this reduced
+  the standalone shell from 16.92 MB to 7.33 MB without changing the C++ engine.
 - The production React bundle is 420.10 kB JavaScript / 131.00 kB gzip and
   35.76 kB CSS / 8.10 kB gzip. At this size, code splitting would add complexity
   without addressing the measured engine/IPC bottlenecks.
