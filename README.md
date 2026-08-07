@@ -50,3 +50,6 @@ See [`docs/PHASE4_DEVELOPMENT.md`](docs/PHASE4_DEVELOPMENT.md) for two-peer vers
 resolution and conflict behavior.
 See [`docs/PHASE5_DEVELOPMENT.md`](docs/PHASE5_DEVELOPMENT.md) for the desktop shell,
 independent engine IPC lifecycle, and Windows release workflow.
+See [`docs/IGNORE_RULES.md`](docs/IGNORE_RULES.md) for deterministic ignore-rule
+semantics, revision/undo behavior, risk previews, and optional privacy-bounded AI
+assistance.
