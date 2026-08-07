@@ -1,6 +1,6 @@
 use reqwest::{redirect::Policy, Client, Url};
 use serde::{Deserialize, Serialize};
-use std::{ptr, slice, time::Duration};
+use std::{ptr, slice, sync::OnceLock, time::Duration};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
 use windows_sys::Win32::{
@@ -20,6 +20,20 @@ const MAX_RESPONSE_BYTES: usize = 128 * 1024;
 const MAX_RULES: usize = 128;
 const MAX_RULE_BYTES: usize = 512;
 const MAX_RULES_BYTES: usize = 16 * 1024;
+
+pub fn ensure_tls_provider() -> Result<(), String> {
+    static PROVIDER: OnceLock<Result<(), String>> = OnceLock::new();
+    PROVIDER
+        .get_or_init(|| {
+            if rustls::crypto::CryptoProvider::get_default().is_some() {
+                return Ok(());
+            }
+            rustls::crypto::ring::default_provider()
+                .install_default()
+                .map_err(|_| "无法初始化 ring TLS 加密后端".to_string())
+        })
+        .clone()
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -285,6 +299,7 @@ async fn generate_with(
     existing_rules: &str,
     context: &IgnoreContext,
 ) -> Result<GeneratedIgnoreRules, String> {
+    ensure_tls_provider()?;
     let endpoint = validate_config(config)?;
     let provider = endpoint.host_str().unwrap_or("custom").to_string();
     let (system, user) = prompt(description, existing_rules, context)?;

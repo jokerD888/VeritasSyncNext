@@ -66,6 +66,11 @@ it without a device-aware I/O policy can make HDD and busy-system behavior worse
 - The Rust desktop Release profile uses size optimization, ThinLTO, one codegen
   unit, abort-on-panic, and symbol stripping. On the audit machine this reduced
   the standalone shell from 16.92 MB to 7.33 MB without changing the C++ engine.
+- The AI HTTP client disables reqwest's broad defaults and explicitly shares the
+  updater's ring-backed rustls provider. Removing the second AWS-LC backend,
+  HTTP/2/HTTP/3, and unused charset dependencies reduced the integrated Tauri
+  `custom-protocol` shell to 5.91 MB (65.0% below the original build) while
+  retaining Windows system proxy discovery and TLS 1.2/1.3 certificate verification.
 - The production React bundle is 420.10 kB JavaScript / 131.00 kB gzip and
   35.76 kB CSS / 8.10 kB gzip. At this size, code splitting would add complexity
   without addressing the measured engine/IPC bottlenecks.

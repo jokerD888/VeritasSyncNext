@@ -122,10 +122,10 @@ fn engine_request(app: &AppHandle, command: &str, args: &[String]) -> Result<Str
     // Normal requests are themselves a health probe. Avoid an extra ping and
     // named-pipe connection before every UI command; only enter the serialized
     // probe/spawn path when the real request fails.
-    let runtime = runtime(&app)?;
+    let runtime = runtime(app)?;
     let finish = |response: String| {
-        if response.starts_with("ERR\t") {
-            Err(response[4..].trim().to_string())
+        if let Some(error) = response.strip_prefix("ERR\t") {
+            Err(error.trim().to_string())
         } else {
             Ok(response)
         }
@@ -133,7 +133,7 @@ fn engine_request(app: &AppHandle, command: &str, args: &[String]) -> Result<Str
     match ipc::request(&runtime.pipe, command, args) {
         Ok(response) => finish(response),
         Err(_) => {
-            let restarted = ensure(&app)?;
+            let restarted = ensure(app)?;
             finish(ipc::request(&restarted.pipe, command, args)?)
         }
     }
@@ -218,7 +218,11 @@ async fn generate_ignore_rules(
     if !matches!(context_mode.as_str(), "private" | "precise") {
         return Err("忽略规则上下文模式无效".into());
     }
-    let current = response_fields(&engine_request(&app, "ignore_get", &[task_id.clone()])?)?;
+    let current = response_fields(&engine_request(
+        &app,
+        "ignore_get",
+        std::slice::from_ref(&task_id),
+    )?)?;
     if current.len() != 5 || current[0] != "OK" {
         return Err("Engine 返回了无效的忽略规则".into());
     }
@@ -271,6 +275,7 @@ async fn install_update(app: AppHandle) -> Result<String, String> {
 }
 
 fn main() {
+    ai::ensure_tls_provider().expect("cannot initialize the desktop TLS provider");
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -304,7 +309,7 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
-            ensure(&app.handle()).map_err(std::io::Error::other)?;
+            ensure(app.handle()).map_err(std::io::Error::other)?;
             let watchdog = app.handle().clone();
             thread::spawn(move || loop {
                 thread::sleep(Duration::from_secs(2));

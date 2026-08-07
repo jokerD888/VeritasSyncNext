@@ -20,7 +20,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 tauri-plugin-log = "2"
 log = "0.4"
-reqwest = { version = "0.13", features = ["json"] }
+# Reuse the updater plugin's ring-backed rustls stack. Reqwest defaults would
+# additionally link AWS-LC, HTTP/2, and charset support into the shell.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
 zeroize = "1"
 
