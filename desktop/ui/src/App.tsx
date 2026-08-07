@@ -63,9 +63,9 @@ function formatTime(timestamp: number) {
 }
 
 function eventTone(level: EngineEvent["level"]) {
-  if (level === "error") return "border-[#ffd8db] bg-[#fff5f5] text-[#bd3440]";
-  if (level === "warning") return "border-[#ffdeb5] bg-[#fff9ee] text-[#aa6410]";
-  return "border-[#dfeaf9] bg-[#f5f9ff] text-[#396093]";
+  if (level === "error") return "event-tone is-error";
+  if (level === "warning") return "event-tone is-warning";
+  return "event-tone is-info";
 }
 
 function roleLabel(task: SyncTask) {
@@ -216,7 +216,7 @@ export function App() {
   const updatePreferences = async (next: DesktopPreferences) => { setPreferences(next); try { setResolvedTheme(await applyColorMode(next.colorMode)); await savePreferences(next); logInfo(`Desktop preferences saved: notifications=${next.notificationsEnabled}, theme=${next.colorMode}`); } catch (error) { setPreferences(preferences); setResolvedTheme(await applyColorMode(preferences.colorMode)); logError(`Unable to save desktop preferences: ${String(error)}`); toast.error("偏好保存失败", { description: String(error) }); } };
 
   return <><div className="app-root" data-theme={resolvedTheme}><Titlebar /><div className="window-shell"><aside className="mica-sidebar"><div className="sidebar-content"><Brand /><nav className="mt-13 grid gap-1">{views.map(({ id, label, icon: Icon }) => <button key={id} className="nav-item" data-active={view === id} onClick={() => setView(id)}><Icon className="size-4" /><span className="flex-1">{label}</span>{id === "conflicts" && taskConflicts.length > 0 ? <span className="rounded-full bg-[#80dbf0] px-2 py-0.5 font-mono text-[10px] font-semibold text-[#112039]">{taskConflicts.length}</span> : null}</button>)}</nav><div className="mt-auto border-t border-white/12 px-2 pt-5"><div className="flex items-center gap-2 text-sm text-[#d6e3f6]"><span className={`status-dot ${engineError ? "problem" : status ? "online" : ""}`} />{engineError ? "需要引擎" : status ? "Engine online" : "连接中"}</div><p className="mt-2 font-mono text-[10px] text-[#8496b4]">IPC / v1 · schema {status?.schemaVersion ?? "—"}</p></div></div></aside>
-    <main className="min-w-0 bg-canvas"><div className="mx-auto max-w-[1540px] px-[clamp(32px,5vw,80px)] py-10"><header className="flex min-h-20 items-center justify-between border-b border-line pb-7"><div><p className="eyebrow">VERITASSYNC NEXT / LOCAL CONTROL</p><h1 className="mt-1 text-4xl font-extrabold tracking-[-.05em] text-ink">{pageTitle}</h1></div><div className="flex items-center gap-2"><Button variant="ghost" onClick={checkUpdates}><UploadCloud className="size-4" />检查更新</Button><Button size="icon" variant="secondary" aria-label="刷新状态" onClick={() => void refresh()}><RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} /></Button><CreateTaskDialog onCreated={async (taskId) => { logInfo(`Task created: ${taskId}`); void notify(preferences, "VeritasSync 已创建任务", `任务 ${taskId} 已由本机引擎接管。`); await refresh(true); }} /></div></header>
+    <main className="content-scroll min-w-0 bg-canvas"><div className="mx-auto max-w-[1540px] px-[clamp(32px,5vw,80px)] py-10"><header className="flex min-h-20 items-center justify-between border-b border-line pb-7"><div><p className="eyebrow">VERITASSYNC NEXT / LOCAL CONTROL</p><h1 className="mt-1 text-4xl font-extrabold tracking-[-.05em] text-ink">{pageTitle}</h1></div><div className="flex items-center gap-2"><Button variant="ghost" onClick={checkUpdates}><UploadCloud className="size-4" />检查更新</Button><Button size="icon" variant="secondary" aria-label="刷新状态" onClick={() => void refresh()}><RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} /></Button><CreateTaskDialog onCreated={async (taskId) => { logInfo(`Task created: ${taskId}`); void notify(preferences, "VeritasSync 已创建任务", `任务 ${taskId} 已由本机引擎接管。`); await refresh(true); }} /></div></header>
       {view === "overview" && <Overview status={status} tasks={tasks} events={events} conflicts={taskConflicts} setView={setView} />}
       {view === "tasks" && <TaskList tasks={tasks} onScan={scan} onRemove={remove} />}
       {view === "conflicts" && <ConflictList conflicts={conflicts} onResolve={resolve} />}
