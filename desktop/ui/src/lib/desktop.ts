@@ -13,16 +13,18 @@ export type ResolvedTheme = Exclude<ColorMode, "system">;
 export interface DesktopPreferences {
   notificationsEnabled: boolean;
   colorMode: ColorMode;
+  trackerUrl: string;
 }
 
 const defaults: DesktopPreferences = {
   notificationsEnabled: true,
-  colorMode: "dark"
+  colorMode: "dark",
+  trackerUrl: "http://127.0.0.1:8787"
 };
 
 const store = load("desktop-preferences.json", {
   autoSave: 200,
-  defaults: { notificationsEnabled: true, colorMode: "dark" }
+  defaults: { notificationsEnabled: true, colorMode: "dark", trackerUrl: "http://127.0.0.1:8787" }
 });
 
 export async function readPreferences(): Promise<DesktopPreferences> {

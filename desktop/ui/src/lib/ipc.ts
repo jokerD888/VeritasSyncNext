@@ -13,6 +13,30 @@ export interface SyncTask {
   mode: TaskMode;
   role: TaskRole;
   root: string;
+  enabled: boolean;
+  runtimeStatus: string;
+  dirty: boolean;
+  lastScanAt: number | null;
+  runtimeError: string | null;
+  networkStatus: "unpaired" | "offline" | "connecting" | "online" | "error";
+  networkError: string | null;
+}
+
+export interface DeviceIdentity {
+  deviceId: string;
+  fingerprint: string;
+  publicKey: string;
+}
+
+export interface PairingInvitation {
+  token: string;
+  code: string;
+  roomId: string;
+}
+
+export interface JoinedInvitation {
+  taskId: string;
+  roomId: string;
 }
 
 export interface EngineEvent {
@@ -88,12 +112,37 @@ export function parseStatus(reply: string): EngineStatus {
   return { schemaVersion: fields[1], taskCount: Number(fields[2]) };
 }
 
+function taskFromFields(fields: string[]): SyncTask {
+  const [id, mode, role, root, enabled = "1", runtimeStatus = "idle", dirty = "0",
+    lastScanAt = "", runtimeError = "", networkStatus = "unpaired", networkError = ""] = fields;
+  return {
+    id,
+    mode: mode as TaskMode,
+    role: role as TaskRole,
+    root,
+    enabled: enabled === "1",
+    runtimeStatus,
+    dirty: dirty === "1",
+    lastScanAt: lastScanAt ? Number(lastScanAt) : null,
+    runtimeError: runtimeError || null,
+    networkStatus: networkStatus as SyncTask["networkStatus"],
+    networkError: networkError || null
+  };
+}
+
 export function parseTasks(reply: string): SyncTask[] {
   return frameRows(reply).map(([id, mode, role, root]) => ({
     id,
     mode: mode as TaskMode,
     role: role as TaskRole,
-    root
+    root,
+    enabled: true,
+    runtimeStatus: "idle",
+    dirty: false,
+    lastScanAt: null,
+    runtimeError: null,
+    networkStatus: "unpaired",
+    networkError: null
   }));
 }
 
@@ -127,8 +176,7 @@ export function parseDashboard(reply: string): DashboardSnapshot {
     if (kind === "END") break;
     const fields = rawFields.map(decodeField);
     if (kind === "TASK") {
-      const [id, mode, role, root] = fields;
-      tasks.push({ id, mode: mode as TaskMode, role: role as TaskRole, root });
+      tasks.push(taskFromFields(fields));
     } else if (kind === "EVENT") {
       const [id, taskId, level, message, timestamp] = fields;
       events.push({ id, taskId: taskId || null, level: level as EngineEvent["level"], message, timestamp: Number(timestamp) });
@@ -188,6 +236,24 @@ export function parseAppliedIgnorePolicy(reply: string): Pick<IgnorePolicyState,
   return { revision: Number(fields[1]), hash: fields[2] };
 }
 
+export function parseDeviceIdentity(reply: string): DeviceIdentity {
+  const fields = responseFields(reply);
+  if (fields[0] !== "OK" || fields.length !== 4) throw new Error("引擎返回了无效的设备身份");
+  return { deviceId: fields[1], fingerprint: fields[2], publicKey: fields[3] };
+}
+
+export function parsePairingInvitation(reply: string): PairingInvitation {
+  const fields = responseFields(reply);
+  if (fields[0] !== "OK" || fields.length !== 4) throw new Error("引擎返回了无效的邀请");
+  return { token: fields[1], code: fields[2], roomId: fields[3] };
+}
+
+export function parseJoinedInvitation(reply: string): JoinedInvitation {
+  const fields = responseFields(reply);
+  if (fields[0] !== "OK" || fields.length !== 3) throw new Error("引擎返回了无效的配对结果");
+  return { taskId: fields[1], roomId: fields[2] };
+}
+
 export function ignorePreviewNeedsConfirmation(preview: IgnorePreview): boolean {
   return preview.trackedNewlyIgnored > 0 || preview.truncated;
 }
@@ -203,6 +269,13 @@ export const engine = {
   conflicts: async (taskId?: string) => parseConflicts(await request("list_conflicts", taskId ? [taskId] : [])),
   createTask: (task: Pick<SyncTask, "id" | "mode" | "role" | "root">) => request("create_task", [task.id, task.mode, task.role, task.root]),
   deleteTask: (taskId: string) => request("delete_task", [taskId]),
+  pauseTask: (taskId: string) => request("pause_task", [taskId]),
+  resumeTask: (taskId: string) => request("resume_task", [taskId]),
+  deviceIdentity: async () => parseDeviceIdentity(await request("device_identity")),
+  createInvitation: async (taskId: string, trackerUrl: string) =>
+    parsePairingInvitation(await request("create_invitation", [taskId, trackerUrl])),
+  joinInvitation: async (token: string, localRoot: string) =>
+    parseJoinedInvitation(await request("join_invitation", [token, localRoot])),
   scanTask: async (taskId: string) => parseScanResult(await request("scan_task", [taskId, "desktop-local"])),
   resolveConflict: (conflictId: string) => request("resolve_conflict", [conflictId]),
   ignoreRules: async (taskId: string) => parseIgnorePolicy(await request("ignore_get", [taskId])),

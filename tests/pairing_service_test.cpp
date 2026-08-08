@@ -2,6 +2,7 @@
 #include "tests/test_framework.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -101,5 +102,52 @@ VSYNC_TEST(PairingServiceCreatesAndConsumesBoundInvitation) {
     std::filesystem::remove(path.string() + "-shm");
     std::filesystem::remove(path.string() + "-wal");
   }
+  std::filesystem::remove_all(target_root);
+}
+
+VSYNC_TEST(PairingServiceCompletesLiveTrackerRoundTripWhenConfigured) {
+  char* tracker_url_value = nullptr;
+  std::size_t tracker_url_length = 0;
+  if (_dupenv_s(&tracker_url_value, &tracker_url_length, "VERITASSYNC_TRACKER_LIVE_URL") != 0 ||
+      tracker_url_value == nullptr || tracker_url_length <= 1) {
+    std::free(tracker_url_value);
+    return;
+  }
+  const std::string tracker_url(tracker_url_value);
+  std::free(tracker_url_value);
+
+  const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  const auto source_db_path =
+      std::filesystem::temp_directory_path() / ("veritassync-live-source-" + stamp + ".db");
+  const auto target_db_path =
+      std::filesystem::temp_directory_path() / ("veritassync-live-target-" + stamp + ".db");
+  const auto source_root =
+      std::filesystem::temp_directory_path() / ("veritassync-live-source-root-" + stamp);
+  const auto target_root =
+      std::filesystem::temp_directory_path() / ("veritassync-live-target-root-" + stamp);
+  std::filesystem::create_directories(source_root);
+  std::filesystem::create_directories(target_root);
+  {
+    veritassync::storage::Database source_db(source_db_path);
+    veritassync::storage::Database target_db(target_db_path);
+    source_db.ApplyMigrations();
+    target_db.ApplyMigrations();
+    source_db.CreateTask({"live-pair", "one_way", "source", source_root.string()});
+    veritassync::security::PairingService source_pairing(
+        source_db, veritassync::security::DeviceIdentity::Generate());
+    veritassync::security::PairingService target_pairing(
+        target_db, veritassync::security::DeviceIdentity::Generate());
+    const auto invitation = source_pairing.CreateInvitation("live-pair", tracker_url);
+    const auto joined = target_pairing.JoinInvitation(invitation.token, target_root.string());
+    VSYNC_CHECK(joined.room_id == invitation.room_id);
+    const auto renewed = source_pairing.RenewTaskEnrollment("live-pair");
+    VSYNC_CHECK(renewed.members.size() == 2);
+  }
+  for (const auto& path : {source_db_path, target_db_path}) {
+    std::filesystem::remove(path);
+    std::filesystem::remove(path.string() + "-shm");
+    std::filesystem::remove(path.string() + "-wal");
+  }
+  std::filesystem::remove_all(source_root);
   std::filesystem::remove_all(target_root);
 }
