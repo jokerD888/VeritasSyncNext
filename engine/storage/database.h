@@ -7,6 +7,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <mutex>
 #include <vector>
 
 struct sqlite3;
@@ -28,6 +29,8 @@ struct TaskRuntimeState {
   bool dirty = true;
   std::optional<std::int64_t> last_scan_at_ms;
   std::optional<std::string> last_error;
+  std::string network_status = "unpaired";
+  std::optional<std::string> network_error;
 };
 
 struct TaskConnection {
@@ -126,40 +129,42 @@ class Database {
   void UpdateTaskRuntime(const std::string& task_id, std::string status, bool dirty,
                          std::optional<std::int64_t> last_scan_at_ms,
                          std::optional<std::string> last_error = std::nullopt);
+  void UpdateTaskNetworkState(const std::string& task_id, std::string network_status,
+                              std::optional<std::string> network_error = std::nullopt);
   void ConfigureTaskConnection(const TaskConnection& connection);
-  [[nodiscard]] std::optional<TaskConnection> FindTaskConnection(
-      const std::string& task_id) const;
+  [[nodiscard]] std::optional<TaskConnection> FindTaskConnection(const std::string& task_id) const;
   void UpsertTaskMember(const TaskMember& member);
   [[nodiscard]] std::vector<TaskMember> ListTaskMembers(const std::string& task_id) const;
   void UpsertFileRecord(const FileRecord& record);
-  void RecordTombstone(std::string task_id, std::string relative_path,
-                       std::string version_id, std::string origin_device_id,
-                       std::uint64_t logical_clock, std::int64_t deleted_at_ms);
-  [[nodiscard]] std::optional<FileRecord> FindFileRecord(
-      const std::string& task_id, const std::string& relative_path) const;
+  void RecordTombstone(std::string task_id, std::string relative_path, std::string version_id,
+                       std::string origin_device_id, std::uint64_t logical_clock,
+                       std::int64_t deleted_at_ms);
+  [[nodiscard]] std::optional<FileRecord> FindFileRecord(const std::string& task_id,
+                                                         const std::string& relative_path) const;
   [[nodiscard]] std::vector<FileRecord> ListFileRecords(const std::string& task_id) const;
   // A version's parent is immutable once recorded. The graph permits a peer to
   // determine whether a received record is a successor or a concurrent branch.
   void RecordVersionLineage(const VersionLineage& lineage);
   [[nodiscard]] std::optional<VersionLineage> FindVersionLineage(
       const std::string& task_id, const std::string& version_id) const;
-  [[nodiscard]] std::vector<VersionLineage> ListVersionLineage(
-      const std::string& task_id) const;
+  [[nodiscard]] std::vector<VersionLineage> ListVersionLineage(const std::string& task_id) const;
   [[nodiscard]] bool IsVersionAncestor(const std::string& task_id,
                                        const std::string& ancestor_version_id,
                                        const std::string& descendant_version_id) const;
   // Advances the durable Lamport clock to max(local, observed_remote) + 1.
   [[nodiscard]] std::uint64_t AdvanceLogicalClock(const std::string& task_id,
-                                                   std::uint64_t observed_remote_clock = 0);
+                                                  std::uint64_t observed_remote_clock = 0);
   void RecordConflict(const ConflictRecord& conflict);
   [[nodiscard]] std::vector<ConflictRecord> ListConflicts() const;
   [[nodiscard]] std::vector<ConflictRecord> ListConflicts(const std::string& task_id) const;
   void UpdateConflictState(const std::string& conflict_id, const std::string& state);
   void RecordEngineEvent(const EngineEvent& event);
   [[nodiscard]] std::vector<EngineEvent> ListEngineEvents(std::size_t limit = 200) const;
-  [[nodiscard]] IgnorePolicyRevision RecordIgnorePolicyRevision(
-      std::string task_id, std::string content, std::string content_hash,
-      std::string source, std::int64_t created_at_ms);
+  [[nodiscard]] IgnorePolicyRevision RecordIgnorePolicyRevision(std::string task_id,
+                                                                std::string content,
+                                                                std::string content_hash,
+                                                                std::string source,
+                                                                std::int64_t created_at_ms);
   [[nodiscard]] std::optional<IgnorePolicyRevision> CurrentIgnorePolicyRevision(
       const std::string& task_id) const;
   [[nodiscard]] std::vector<IgnorePolicyRevision> ListIgnorePolicyRevisions(
@@ -172,19 +177,26 @@ class Database {
                                    std::span<const std::uint64_t> chunk_indices,
                                    std::int64_t updated_at_ms);
   void UpdateTransferState(const TransferId& transfer_id, std::string state,
-                           std::int64_t updated_at_ms, std::optional<std::string> error_code = std::nullopt);
+                           std::int64_t updated_at_ms,
+                           std::optional<std::string> error_code = std::nullopt);
   [[nodiscard]] std::optional<TransferRecord> FindActiveDownloadTransfer(
       const std::string& task_id, const std::string& peer_device_id,
       const std::string& relative_path, std::span<const std::uint8_t> file_hash) const;
   [[nodiscard]] std::optional<std::string> TransferState(const TransferId& transfer_id) const;
-  [[nodiscard]] std::vector<std::uint64_t> CompletedTransferChunks(const TransferId& transfer_id) const;
+  [[nodiscard]] std::vector<std::uint64_t> CompletedTransferChunks(
+      const TransferId& transfer_id) const;
   [[nodiscard]] int SchemaVersion() const;
   [[nodiscard]] int CountRows(const std::string& table) const;
+  // Runtime components take this recursive lock around multi-call operations.
+  // SQLite is opened FULLMUTEX, while this guard additionally prevents logical
+  // transactions and the reusable upsert statement from interleaving.
+  [[nodiscard]] std::recursive_mutex& AccessMutex() const { return access_mutex_; }
 
  private:
   void Execute(const char* sql) const;
   sqlite3* connection_ = nullptr;
   sqlite3_stmt* upsert_file_record_ = nullptr;
+  mutable std::recursive_mutex access_mutex_;
 };
 
 }  // namespace veritassync::storage

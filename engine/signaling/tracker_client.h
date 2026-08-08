@@ -21,16 +21,16 @@ struct TrackerHttpResponse {
 class TrackerHttpTransport {
  public:
   virtual ~TrackerHttpTransport() = default;
-  [[nodiscard]] virtual TrackerHttpResponse Post(
-      std::string_view base_url, std::string_view path,
-      const std::map<std::string, std::string>& headers, std::string_view body) = 0;
+  [[nodiscard]] virtual TrackerHttpResponse Post(std::string_view base_url, std::string_view path,
+                                                 const std::map<std::string, std::string>& headers,
+                                                 std::string_view body) = 0;
 };
 
 class WinHttpTrackerTransport final : public TrackerHttpTransport {
  public:
-  [[nodiscard]] TrackerHttpResponse Post(
-      std::string_view base_url, std::string_view path,
-      const std::map<std::string, std::string>& headers, std::string_view body) override;
+  [[nodiscard]] TrackerHttpResponse Post(std::string_view base_url, std::string_view path,
+                                         const std::map<std::string, std::string>& headers,
+                                         std::string_view body) override;
 };
 
 struct TrackerMember {
@@ -60,31 +60,26 @@ class TrackerClient final : public SignalingRelay {
                 std::unique_ptr<TrackerHttpTransport> transport =
                     std::make_unique<WinHttpTrackerTransport>());
 
-  [[nodiscard]] CreatedInvitation CreateRoom(std::string_view task_id,
-                                              Topology topology,
-                                              protocol::Role local_role,
-                                              protocol::Role invited_role);
+  [[nodiscard]] CreatedInvitation CreateRoom(std::string_view task_id, Topology topology,
+                                             protocol::Role local_role,
+                                             protocol::Role invited_role);
+  [[nodiscard]] std::string CreateInvitation(std::string_view room_id, protocol::Role invited_role);
   [[nodiscard]] TrackerEnrollment RedeemInvitation(std::string_view invitation_code,
-                                                    std::string_view task_id,
-                                                    protocol::Role requested_role);
-  [[nodiscard]] TrackerEnrollment JoinRoom(std::string_view room_id,
-                                           std::string_view task_id,
+                                                   std::string_view task_id,
+                                                   protocol::Role requested_role);
+  [[nodiscard]] TrackerEnrollment JoinRoom(std::string_view room_id, std::string_view task_id,
                                            protocol::Role role);
   void UseEnrollment(TrackerEnrollment enrollment);
-  [[nodiscard]] const std::optional<TrackerEnrollment>& Enrollment() const {
-    return enrollment_;
-  }
+  [[nodiscard]] const std::optional<TrackerEnrollment>& Enrollment() const { return enrollment_; }
 
   void Forward(const RelayMessage& message) override;
-  [[nodiscard]] std::vector<RelayMessage> DrainInbox(
-      const std::string& device_id) override;
+  [[nodiscard]] std::vector<RelayMessage> DrainInbox(const std::string& device_id) override;
 
   [[nodiscard]] static std::string EncodeField(std::string_view value);
   [[nodiscard]] static std::string DecodeField(std::string_view value);
 
  private:
-  [[nodiscard]] TrackerHttpResponse SignedPost(std::string_view path,
-                                               std::string body,
+  [[nodiscard]] TrackerHttpResponse SignedPost(std::string_view path, std::string body,
                                                bool include_session);
   [[nodiscard]] TrackerEnrollment ParseEnrollment(std::string_view response) const;
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "engine/transport/transport.h"
+#include "engine/transport/peer_transport.h"
 
 #include <filesystem>
 #include <functional>
@@ -8,13 +8,9 @@
 #include <string>
 
 namespace veritassync::transport {
-class WebRtcTransport final : public Transport {
+class WebRtcTransport final : public PeerTransport {
  public:
-  using SdpCallback = std::function<void(std::string)>;
-  using RemoteDescriptionCallback = std::function<void(bool)>;
-  struct IceCandidate { std::string mid; std::int32_t mline_index; std::string candidate; };
-  using IceCallback = std::function<void(IceCandidate)>;
-  explicit WebRtcTransport(const std::filesystem::path& bridge_path);
+  explicit WebRtcTransport(const std::filesystem::path& bridge_path, bool initiator = true);
   ~WebRtcTransport() override;
   WebRtcTransport(const WebRtcTransport&) = delete;
   void Send(protocol::Channel channel, std::vector<std::uint8_t> wire) override;
@@ -29,11 +25,15 @@ class WebRtcTransport final : public Transport {
   void ApplyRemoteAnswer(std::string sdp);
   void ApplyRemoteIceCandidate(const IceCandidate& candidate);
   [[nodiscard]] bool IsReady() const;
+
  private:
-  static void __cdecl Receive(void* context, std::uint32_t channel, const std::uint8_t* bytes, std::uint32_t length);
+  static void __cdecl Receive(void* context, std::uint32_t channel, const std::uint8_t* bytes,
+                              std::uint32_t length);
   static void __cdecl ReceiveOffer(void* context, const char* sdp, std::uint32_t length);
   static void __cdecl ReceiveAnswer(void* context, const char* sdp, std::uint32_t length);
-  static void __cdecl ReceiveIce(void* context, const char* mid, std::uint32_t mid_length, std::int32_t index, const char* candidate, std::uint32_t candidate_length);
+  static void __cdecl ReceiveIce(void* context, const char* mid, std::uint32_t mid_length,
+                                 std::int32_t index, const char* candidate,
+                                 std::uint32_t candidate_length);
   static void __cdecl ReceiveRemoteDescription(void* context, std::uint32_t success);
 
   void* module_ = nullptr;

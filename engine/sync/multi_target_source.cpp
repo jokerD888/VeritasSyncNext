@@ -22,12 +22,11 @@ constexpr std::size_t kResumeBelowBytes = 1U * 1024U * 1024U;
 
 [[nodiscard]] std::int64_t NowMilliseconds() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
 }
 
-[[nodiscard]] char HexDigit(const std::uint8_t value) {
-  return "0123456789abcdef"[value & 0x0fU];
-}
+[[nodiscard]] char HexDigit(const std::uint8_t value) { return "0123456789abcdef"[value & 0x0fU]; }
 
 [[nodiscard]] std::string EncodeHash(const common::ContentHash& hash) {
   std::string result(hash.size() * 2U, '0');
@@ -73,7 +72,6 @@ MultiTargetSource::~MultiTargetSource() {
 
 void MultiTargetSource::AddTarget(MultiTargetPeerConfig config, transport::Transport& transport) {
   std::scoped_lock lock(mutex_);
-  if (started_) throw std::logic_error("targets must be added before the source starts");
   if (config.device_id.empty() || config.device_fingerprint.empty() ||
       config.authorization_digest.empty() || FindPeer(config.device_id) != nullptr) {
     throw std::invalid_argument("target identity is invalid or duplicate");
@@ -82,11 +80,12 @@ void MultiTargetSource::AddTarget(MultiTargetPeerConfig config, transport::Trans
   peer->config = std::move(config);
   peer->transport = &transport;
   auto* peer_pointer = peer.get();
-  transport.SetReceiveCallback([this, peer_pointer](const protocol::Channel channel,
-                                                     std::vector<std::uint8_t> wire) {
-    Receive(*peer_pointer, channel, std::move(wire));
-  });
+  transport.SetReceiveCallback(
+      [this, peer_pointer](const protocol::Channel channel, std::vector<std::uint8_t> wire) {
+        Receive(*peer_pointer, channel, std::move(wire));
+      });
   peers_.push_back(std::move(peer));
+  if (started_) SendHello(*peer_pointer);
 }
 
 void MultiTargetSource::Start() {
@@ -104,9 +103,10 @@ void MultiTargetSource::RefreshSource() {
   rules.LoadFile(config_.task_root);
   const auto snapshot = storage::ManifestScanner(std::move(rules)).Scan(config_.task_root);
   ++snapshot_scan_count_;
-  [[maybe_unused]] const auto reconciled = SnapshotReconciler(common::NewUuidV4).Apply(
-      config_.database, snapshot,
-      {config_.task_id, config_.device_id, manifest_revision_ + 1U, NowMilliseconds()});
+  [[maybe_unused]] const auto reconciled =
+      SnapshotReconciler(common::NewUuidV4)
+          .Apply(config_.database, snapshot,
+                 {config_.task_id, config_.device_id, manifest_revision_ + 1U, NowMilliseconds()});
 
   source_manifest_ = {++manifest_revision_, {}};
   source_files_.clear();
@@ -116,9 +116,10 @@ void MultiTargetSource::RefreshSource() {
       continue;
     }
     if (!entry.content_hash.has_value()) throw std::logic_error("source file snapshot has no hash");
-    source_manifest_.entries.push_back({entry.relative_path, entry.size, EncodeHash(*entry.content_hash)});
-    source_files_.push_back({config_.task_root / std::filesystem::path(entry.relative_path),
-                             *entry.content_hash});
+    source_manifest_.entries.push_back(
+        {entry.relative_path, entry.size, EncodeHash(*entry.content_hash)});
+    source_files_.push_back(
+        {config_.task_root / std::filesystem::path(entry.relative_path), *entry.content_hash});
   }
   std::ranges::sort(source_files_, {}, &SourceFile::hash);
   for (auto& peer : peers_) {
@@ -139,8 +140,10 @@ void MultiTargetSource::Pump() {
       } else if (upload->session->HasPending()) {
         ++peer->statistics.backpressure_pauses;
       }
-      if (!upload->session->HasPending()) upload = peer->uploads.erase(upload);
-      else ++upload;
+      if (!upload->session->HasPending())
+        upload = peer->uploads.erase(upload);
+      else
+        ++upload;
     }
   }
 }
@@ -180,7 +183,8 @@ void MultiTargetSource::Receive(Peer& peer, const protocol::Channel channel,
                                 std::vector<std::uint8_t> wire) {
   std::scoped_lock lock(mutex_);
   try {
-    if (channel == protocol::Channel::kControl) peer.statistics.control_bytes_received += wire.size();
+    if (channel == protocol::Channel::kControl)
+      peer.statistics.control_bytes_received += wire.size();
     const auto frame = protocol::DecodeFrameView(wire);
     if (!protocol::IsAllowedOn(channel, frame.type)) throw std::invalid_argument("wrong_channel");
     if (frame.type == protocol::FrameType::kHello) {
@@ -215,8 +219,10 @@ void MultiTargetSource::Receive(Peer& peer, const protocol::Channel channel,
 void MultiTargetSource::Send(Peer& peer, const protocol::Channel channel,
                              const protocol::FrameType type, std::vector<std::uint8_t> payload) {
   auto wire = protocol::EncodeFrame({type, peer.next_request_id++, std::move(payload)});
-  if (channel == protocol::Channel::kControl) peer.statistics.control_bytes_sent += wire.size();
-  else peer.statistics.bulk_bytes_sent += wire.size();
+  if (channel == protocol::Channel::kControl)
+    peer.statistics.control_bytes_sent += wire.size();
+  else
+    peer.statistics.bulk_bytes_sent += wire.size();
   peer.transport->Send(channel, std::move(wire));
 }
 
@@ -232,7 +238,8 @@ void MultiTargetSource::SendManifest(Peer& peer) {
 }
 
 void MultiTargetSource::HandleFileRequest(Peer& peer, const protocol::FileRequest& request) {
-  const auto source = std::ranges::lower_bound(source_files_, request.file_hash, {}, &SourceFile::hash);
+  const auto source =
+      std::ranges::lower_bound(source_files_, request.file_hash, {}, &SourceFile::hash);
   if (source == source_files_.end() || source->hash != request.file_hash) {
     Send(peer, protocol::Channel::kControl, protocol::FrameType::kCancel,
          protocol::EncodeCancel({request.transfer_id, "source_missing"}));
@@ -271,7 +278,8 @@ MultiTargetSource::Peer* MultiTargetSource::FindPeer(const std::string& target_d
   return peer == peers_.end() ? nullptr : peer->get();
 }
 
-const MultiTargetSource::Peer* MultiTargetSource::FindPeer(const std::string& target_device_id) const {
+const MultiTargetSource::Peer* MultiTargetSource::FindPeer(
+    const std::string& target_device_id) const {
   const auto peer = std::ranges::find_if(peers_, [&](const std::unique_ptr<Peer>& candidate) {
     return candidate->config.device_id == target_device_id;
   });

@@ -5,19 +5,23 @@
 #include <filesystem>
 
 VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
-  const auto path = std::filesystem::temp_directory_path() / ("veritassync-phase0-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  const auto path =
+      std::filesystem::temp_directory_path() /
+      ("veritassync-phase0-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
   {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.ApplyMigrations();
-    VSYNC_CHECK(database.SchemaVersion() == 6);
+    VSYNC_CHECK(database.SchemaVersion() == 7);
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
     const auto task = database.FindTask("task-1");
     VSYNC_CHECK(task.has_value());
     VSYNC_CHECK(task->root_path == "C:/sync");
     VSYNC_CHECK(!database.FindTask("missing").has_value());
     VSYNC_CHECK_THROWS(database.CreateTask({"invalid-one-way", "one_way", "peer", "C:/sync"}));
-    VSYNC_CHECK_THROWS(database.CreateTask({"invalid-two-way", "bidirectional", "source", "C:/sync"}));
+    VSYNC_CHECK_THROWS(
+        database.CreateTask({"invalid-two-way", "bidirectional", "source", "C:/sync"}));
     VSYNC_CHECK(database.CountRows("tasks") == 1);
     VSYNC_CHECK(database.CountRows("file_records") == 0);
   }
@@ -27,13 +31,17 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
 }
 
 VSYNC_TEST(DatabasePersistsTaskRuntimeConnectionAndAuthorizedMembers) {
-  const auto path = std::filesystem::temp_directory_path() / ("veritassync-runtime-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  const auto path =
+      std::filesystem::temp_directory_path() /
+      ("veritassync-runtime-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
   {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
     auto runtime = database.RuntimeState("task-1");
     VSYNC_CHECK(runtime.enabled && runtime.dirty && runtime.status == "idle");
+    VSYNC_CHECK(runtime.network_status == "unpaired");
     database.UpdateTaskRuntime("task-1", "watching", false, 1234);
     runtime = database.RuntimeState("task-1");
     VSYNC_CHECK(runtime.status == "watching" && !runtime.dirty);
@@ -44,8 +52,10 @@ VSYNC_TEST(DatabasePersistsTaskRuntimeConnectionAndAuthorizedMembers) {
     database.SetTaskEnabled("task-1", true);
     VSYNC_CHECK(database.RuntimeState("task-1").dirty);
 
-    database.ConfigureTaskConnection({"task-1", "https://tracker.example", "room-1",
-                                      std::string(64, 'a'), 1200});
+    database.ConfigureTaskConnection(
+        {"task-1", "https://tracker.example", "room-1", std::string(64, 'a'), 1200});
+    database.UpdateTaskNetworkState("task-1", "connecting");
+    VSYNC_CHECK(database.RuntimeState("task-1").network_status == "connecting");
     const auto connection = database.FindTaskConnection("task-1");
     VSYNC_CHECK(connection.has_value() && connection->room_id == "room-1");
     database.UpsertTaskMember({"task-1", "device-a", std::string(64, 'b'), "source", 1200, false});
@@ -64,13 +74,18 @@ VSYNC_TEST(DatabasePersistsTaskRuntimeConnectionAndAuthorizedMembers) {
 }
 
 VSYNC_TEST(DatabasePersistsVersionedIgnorePoliciesAndDeletesTheirHistoryWithTask) {
-  const auto path = std::filesystem::temp_directory_path() / ("veritassync-ignore-history-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  const auto path =
+      std::filesystem::temp_directory_path() /
+      ("veritassync-ignore-history-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
   {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
-    const auto first = database.RecordIgnorePolicyRevision("task-1", "*.log\n", std::string(64, '1'), "manual", 100);
-    const auto second = database.RecordIgnorePolicyRevision("task-1", "*.log\nbuild/\n", std::string(64, '2'), "ai", 101);
+    const auto first = database.RecordIgnorePolicyRevision("task-1", "*.log\n",
+                                                           std::string(64, '1'), "manual", 100);
+    const auto second = database.RecordIgnorePolicyRevision("task-1", "*.log\nbuild/\n",
+                                                            std::string(64, '2'), "ai", 101);
     VSYNC_CHECK(first.revision == 1);
     VSYNC_CHECK(second.revision == 2);
     const auto current = database.CurrentIgnorePolicyRevision("task-1");
@@ -90,14 +105,18 @@ VSYNC_TEST(DatabasePersistsVersionedIgnorePoliciesAndDeletesTheirHistoryWithTask
 }
 
 VSYNC_TEST(DatabaseListsDeletesTasksAndPersistsEngineEvents) {
-  const auto path = std::filesystem::temp_directory_path() / ("veritassync-events-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  const auto path =
+      std::filesystem::temp_directory_path() /
+      ("veritassync-events-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
   {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.CreateTask({"task-a", "one_way", "source", "C:/a"});
     database.CreateTask({"task-b", "bidirectional", "peer", "C:/b"});
     VSYNC_CHECK(database.ListTasks().size() == 2);
-    database.RecordEngineEvent({0, std::optional<std::string>{"task-a"}, "info", "task created", 100});
+    database.RecordEngineEvent(
+        {0, std::optional<std::string>{"task-a"}, "info", "task created", 100});
     database.RecordEngineEvent({0, std::nullopt, "warning", "engine restarted", 101});
     const auto events = database.ListEngineEvents();
     VSYNC_CHECK(events.size() == 2);
@@ -115,7 +134,10 @@ VSYNC_TEST(DatabaseListsDeletesTasksAndPersistsEngineEvents) {
 }
 
 VSYNC_TEST(DatabasePersistsVersionLineageLamportClockAndConflicts) {
-  const auto path = std::filesystem::temp_directory_path() / ("veritassync-versions-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  const auto path =
+      std::filesystem::temp_directory_path() /
+      ("veritassync-versions-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
   {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
@@ -149,13 +171,24 @@ VSYNC_TEST(DatabasePersistsVersionLineageLamportClockAndConflicts) {
 }
 
 VSYNC_TEST(DatabasePersistsFileVersionsAndTombstones) {
-  const auto path = std::filesystem::temp_directory_path() / ("veritassync-files-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  const auto path =
+      std::filesystem::temp_directory_path() /
+      ("veritassync-files-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
   {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
-    database.UpsertFileRecord({"task-1", "nested/notes.txt", veritassync::storage::FileKind::kFile, 42, 99,
-                               {1, 2, 3}, "version-1", "device-a", 0, std::nullopt});
+    database.UpsertFileRecord({"task-1",
+                               "nested/notes.txt",
+                               veritassync::storage::FileKind::kFile,
+                               42,
+                               99,
+                               {1, 2, 3},
+                               "version-1",
+                               "device-a",
+                               0,
+                               std::nullopt});
     const auto file = database.FindFileRecord("task-1", "nested/notes.txt");
     VSYNC_CHECK(file.has_value());
     VSYNC_CHECK(file->content_hash == std::vector<std::uint8_t>({1, 2, 3}));
@@ -166,8 +199,16 @@ VSYNC_TEST(DatabasePersistsFileVersionsAndTombstones) {
     VSYNC_CHECK(tombstone->kind == veritassync::storage::FileKind::kTombstone);
     VSYNC_CHECK(tombstone->deleted_at_ms == std::optional<std::int64_t>{1234});
     VSYNC_CHECK(tombstone->content_hash.empty());
-    VSYNC_CHECK_THROWS(database.UpsertFileRecord({"task-1", "../escape", veritassync::storage::FileKind::kFile, 1, 1,
-                                                   {1}, "version-3", "device-a", 0, std::nullopt}));
+    VSYNC_CHECK_THROWS(database.UpsertFileRecord({"task-1",
+                                                  "../escape",
+                                                  veritassync::storage::FileKind::kFile,
+                                                  1,
+                                                  1,
+                                                  {1},
+                                                  "version-3",
+                                                  "device-a",
+                                                  0,
+                                                  std::nullopt}));
   }
   std::filesystem::remove(path);
   std::filesystem::remove(path.string() + "-shm");
@@ -175,22 +216,37 @@ VSYNC_TEST(DatabasePersistsFileVersionsAndTombstones) {
 }
 
 VSYNC_TEST(DatabasePersistsCompletedTransferChunksForResume) {
-  const auto path = std::filesystem::temp_directory_path() / ("veritassync-transfer-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  const auto path =
+      std::filesystem::temp_directory_path() /
+      ("veritassync-transfer-" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
   {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
     veritassync::storage::TransferId transfer_id{};
     transfer_id.front() = 42;
-    database.CreateTransfer({transfer_id, "task-1", "device-b", "download", std::vector<std::uint8_t>(32, 7), "active", 100, 100, "nested/file.bin"});
-    VSYNC_CHECK_THROWS(database.CreateTransfer({{}, "task-1", "device-b", "download", std::vector<std::uint8_t>(32, 7), "unknown", 100, 100}));
-    VSYNC_CHECK_THROWS(database.CreateTransfer({transfer_id, "task-1", "device-b", "download", {1}, "active", 100, 100}));
+    database.CreateTransfer({transfer_id, "task-1", "device-b", "download",
+                             std::vector<std::uint8_t>(32, 7), "active", 100, 100,
+                             "nested/file.bin"});
+    VSYNC_CHECK_THROWS(database.CreateTransfer({{},
+                                                "task-1",
+                                                "device-b",
+                                                "download",
+                                                std::vector<std::uint8_t>(32, 7),
+                                                "unknown",
+                                                100,
+                                                100}));
+    VSYNC_CHECK_THROWS(database.CreateTransfer(
+        {transfer_id, "task-1", "device-b", "download", {1}, "active", 100, 100}));
     database.MarkTransferChunkCompleted(transfer_id, 3, 101);
     database.MarkTransferChunkCompleted(transfer_id, 0, 102);
     const std::vector<std::uint64_t> batch{3, 5, 5};
     database.MarkTransferChunksCompleted(transfer_id, batch, 103);
-    VSYNC_CHECK(database.CompletedTransferChunks(transfer_id) == std::vector<std::uint64_t>({0, 3, 5}));
-    const auto active = database.FindActiveDownloadTransfer("task-1", "device-b", "nested/file.bin", std::vector<std::uint8_t>(32, 7));
+    VSYNC_CHECK(database.CompletedTransferChunks(transfer_id) ==
+                std::vector<std::uint64_t>({0, 3, 5}));
+    const auto active = database.FindActiveDownloadTransfer("task-1", "device-b", "nested/file.bin",
+                                                            std::vector<std::uint8_t>(32, 7));
     VSYNC_CHECK(active.has_value());
     VSYNC_CHECK(active->transfer_id == transfer_id);
   }

@@ -85,7 +85,7 @@ VSYNC_TEST(WebRtcSignalingSessionRelaysTwoLocalPeerDescriptionsAndCandidates) {
   using namespace veritassync;
   const auto bridge_path = BridgeLibraryPath();
   transport::WebRtcTransport offerer(bridge_path);
-  transport::WebRtcTransport answerer(bridge_path);
+  transport::WebRtcTransport answerer(bridge_path, false);
   RecordingRelay room;
   room.Join({"task-1", "sync-key", "node-a", "fingerprint-a", protocol::Role::kPeer, "token-a"});
   room.Join({"task-1", "sync-key", "node-b", "fingerprint-b", protocol::Role::kPeer, "token-b"});

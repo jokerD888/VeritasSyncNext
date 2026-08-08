@@ -25,8 +25,8 @@ std::wstring Widen(const std::string_view text) {
                                        static_cast<int>(text.size()), nullptr, 0);
   if (size <= 0) throw std::invalid_argument("tracker URL is not valid UTF-8");
   std::wstring result(static_cast<std::size_t>(size), L'\0');
-  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                          static_cast<int>(text.size()), result.data(), size) != size) {
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
+                          result.data(), size) != size) {
     throw std::invalid_argument("tracker URL is not valid UTF-8");
   }
   return result;
@@ -45,9 +45,12 @@ std::string Hex(const std::span<const std::uint8_t> bytes) {
 
 std::string RoleName(const protocol::Role role) {
   switch (role) {
-    case protocol::Role::kSource: return "source";
-    case protocol::Role::kTarget: return "target";
-    case protocol::Role::kPeer: return "peer";
+    case protocol::Role::kSource:
+      return "source";
+    case protocol::Role::kTarget:
+      return "target";
+    case protocol::Role::kPeer:
+      return "peer";
   }
   throw std::invalid_argument("invalid tracker role");
 }
@@ -61,10 +64,14 @@ protocol::Role ParseRole(const std::string_view role) {
 
 std::string KindName(const MessageKind kind) {
   switch (kind) {
-    case MessageKind::kOffer: return "offer";
-    case MessageKind::kAnswer: return "answer";
-    case MessageKind::kIceCandidate: return "ice";
-    case MessageKind::kIceRestart: return "ice_restart";
+    case MessageKind::kOffer:
+      return "offer";
+    case MessageKind::kAnswer:
+      return "answer";
+    case MessageKind::kIceCandidate:
+      return "ice";
+    case MessageKind::kIceRestart:
+      return "ice_restart";
   }
   throw std::invalid_argument("invalid signal kind");
 }
@@ -82,9 +89,8 @@ std::vector<std::string_view> Fields(const std::string_view line) {
   std::size_t first = 0;
   while (first <= line.size()) {
     const auto separator = line.find('\t', first);
-    fields.push_back(line.substr(first, separator == std::string_view::npos
-                                            ? line.size() - first
-                                            : separator - first));
+    fields.push_back(line.substr(
+        first, separator == std::string_view::npos ? line.size() - first : separator - first));
     if (separator == std::string_view::npos) break;
     first = separator + 1;
   }
@@ -103,20 +109,25 @@ std::int64_t ParseInteger(const std::string_view value, const char* field) {
 class InternetHandle {
  public:
   explicit InternetHandle(HINTERNET handle = nullptr) : handle_(handle) {}
-  ~InternetHandle() { if (handle_ != nullptr) WinHttpCloseHandle(handle_); }
+  ~InternetHandle() {
+    if (handle_ != nullptr) WinHttpCloseHandle(handle_);
+  }
   InternetHandle(const InternetHandle&) = delete;
   InternetHandle& operator=(const InternetHandle&) = delete;
   [[nodiscard]] HINTERNET Get() const { return handle_; }
+
  private:
   HINTERNET handle_;
 };
 
 }  // namespace
 
-TrackerHttpResponse WinHttpTrackerTransport::Post(
-    const std::string_view base_url, const std::string_view path,
-    const std::map<std::string, std::string>& headers, const std::string_view body) {
-  if (path.empty() || path.front() != '/') throw std::invalid_argument("tracker path must be absolute");
+TrackerHttpResponse WinHttpTrackerTransport::Post(const std::string_view base_url,
+                                                  const std::string_view path,
+                                                  const std::map<std::string, std::string>& headers,
+                                                  const std::string_view body) {
+  if (path.empty() || path.front() != '/')
+    throw std::invalid_argument("tracker path must be absolute");
   const auto full_url = std::string(base_url) + std::string(path);
   const auto wide_url = Widen(full_url);
   URL_COMPONENTS parts{};
@@ -147,9 +158,10 @@ TrackerHttpResponse WinHttpTrackerTransport::Post(
   for (const auto& [name, value] : headers) {
     header_block += Widen(name + ": " + value + "\r\n");
   }
-  if (WinHttpSendRequest(request.Get(), header_block.c_str(), static_cast<DWORD>(header_block.size()),
-                         const_cast<char*>(body.data()), static_cast<DWORD>(body.size()),
-                         static_cast<DWORD>(body.size()), 0) == FALSE ||
+  if (WinHttpSendRequest(request.Get(), header_block.c_str(),
+                         static_cast<DWORD>(header_block.size()), const_cast<char*>(body.data()),
+                         static_cast<DWORD>(body.size()), static_cast<DWORD>(body.size()),
+                         0) == FALSE ||
       WinHttpReceiveResponse(request.Get(), nullptr) == FALSE) {
     throw std::runtime_error("Tracker request failed");
   }
@@ -185,7 +197,8 @@ TrackerClient::TrackerClient(std::string base_url, const security::DeviceIdentit
                              std::unique_ptr<TrackerHttpTransport> transport)
     : base_url_(std::move(base_url)), identity_(identity), transport_(std::move(transport)) {
   while (!base_url_.empty() && base_url_.back() == '/') base_url_.pop_back();
-  if (base_url_.empty() || transport_ == nullptr) throw std::invalid_argument("Tracker client configuration is invalid");
+  if (base_url_.empty() || transport_ == nullptr)
+    throw std::invalid_argument("Tracker client configuration is invalid");
 }
 
 std::string TrackerClient::EncodeField(const std::string_view value) {
@@ -197,7 +210,9 @@ std::string TrackerClient::EncodeField(const std::string_view value) {
         character == '.' || character == '~') {
       encoded.push_back(static_cast<char>(character));
     } else {
-      encoded.push_back('%'); encoded.push_back(kHex[character >> 4U]); encoded.push_back(kHex[character & 0x0fU]);
+      encoded.push_back('%');
+      encoded.push_back(kHex[character >> 4U]);
+      encoded.push_back(kHex[character & 0x0fU]);
     }
   }
   return encoded;
@@ -212,7 +227,10 @@ std::string TrackerClient::DecodeField(const std::string_view value) {
   };
   std::string decoded;
   for (std::size_t index = 0; index < value.size(); ++index) {
-    if (value[index] != '%') { decoded.push_back(value[index]); continue; }
+    if (value[index] != '%') {
+      decoded.push_back(value[index]);
+      continue;
+    }
     if (index + 2 >= value.size()) throw std::runtime_error("Tracker returned malformed escaping");
     const int high = digit(value[index + 1]);
     const int low = digit(value[index + 2]);
@@ -226,13 +244,14 @@ std::string TrackerClient::DecodeField(const std::string_view value) {
 TrackerHttpResponse TrackerClient::SignedPost(const std::string_view path, std::string body,
                                               const bool include_session) {
   const auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+                             std::chrono::system_clock::now().time_since_epoch())
+                             .count();
   const auto nonce = common::NewUuidV4();
   const auto body_bytes = std::span<const std::uint8_t>(
       reinterpret_cast<const std::uint8_t*>(body.data()), body.size());
   const auto body_hash = Hex(common::Blake3(body_bytes));
-  const auto canonical = "POST\n" + std::string(path) + "\n" + std::to_string(timestamp) +
-                         "\n" + nonce + "\n" + body_hash;
+  const auto canonical = "POST\n" + std::string(path) + "\n" + std::to_string(timestamp) + "\n" +
+                         nonce + "\n" + body_hash;
   const auto canonical_bytes = std::span<const std::uint8_t>(
       reinterpret_cast<const std::uint8_t*>(canonical.data()), canonical.size());
   std::map<std::string, std::string> headers{
@@ -261,16 +280,25 @@ TrackerEnrollment TrackerClient::ParseEnrollment(const std::string_view response
   std::string line;
   if (!std::getline(stream, line)) throw std::runtime_error("Tracker returned an empty response");
   const auto first = Fields(line);
-  if (first.size() != 6 || first[0] != "OK") throw std::runtime_error("Tracker enrollment response is invalid");
-  TrackerEnrollment enrollment{DecodeField(first[1]), DecodeField(first[2]), DecodeField(first[3]),
-                               ParseInteger(first[4], "session expiry"), {}};
+  if (first.size() != 6 || first[0] != "OK")
+    throw std::runtime_error("Tracker enrollment response is invalid");
+  TrackerEnrollment enrollment{DecodeField(first[1]),
+                               DecodeField(first[2]),
+                               DecodeField(first[3]),
+                               ParseInteger(first[4], "session expiry"),
+                               {}};
   if (first[5] != "MEMBERS") throw std::runtime_error("Tracker enrollment marker is invalid");
   bool ended = false;
   while (std::getline(stream, line)) {
     const auto fields = Fields(line);
-    if (fields.size() == 1 && fields[0] == "END") { ended = true; break; }
-    if (fields.size() != 4 || fields[0] != "MEMBER") throw std::runtime_error("Tracker member row is invalid");
-    enrollment.members.push_back({DecodeField(fields[1]), DecodeField(fields[2]), ParseRole(fields[3])});
+    if (fields.size() == 1 && fields[0] == "END") {
+      ended = true;
+      break;
+    }
+    if (fields.size() != 4 || fields[0] != "MEMBER")
+      throw std::runtime_error("Tracker member row is invalid");
+    enrollment.members.push_back(
+        {DecodeField(fields[1]), DecodeField(fields[2]), ParseRole(fields[3])});
   }
   if (!ended || enrollment.room_id.empty() || enrollment.authorization_digest.size() != 64 ||
       enrollment.session_token.empty() || enrollment.session_expires_at_ms <= 0) {
@@ -280,16 +308,18 @@ TrackerEnrollment TrackerClient::ParseEnrollment(const std::string_view response
 }
 
 CreatedInvitation TrackerClient::CreateRoom(const std::string_view task_id, const Topology topology,
-                                             const protocol::Role local_role,
-                                             const protocol::Role invited_role) {
+                                            const protocol::Role local_role,
+                                            const protocol::Role invited_role) {
   const auto body = EncodeField(task_id) + "\t" +
-      (topology == Topology::kOneWay ? "one_way" : "bidirectional") + "\t" +
-      RoleName(local_role) + "\t" + RoleName(invited_role);
+                    (topology == Topology::kOneWay ? "one_way" : "bidirectional") + "\t" +
+                    RoleName(local_role) + "\t" + RoleName(invited_role);
   const auto response = SignedPost("/v1/rooms/create", body, false);
   const auto newline = response.body.find('\n');
-  if (newline == std::string::npos) throw std::runtime_error("Tracker invitation response is invalid");
+  if (newline == std::string::npos)
+    throw std::runtime_error("Tracker invitation response is invalid");
   const auto fields = Fields(std::string_view(response.body).substr(0, newline));
-  if (fields.size() != 2 || fields[0] != "INVITE") throw std::runtime_error("Tracker invitation code is missing");
+  if (fields.size() != 2 || fields[0] != "INVITE")
+    throw std::runtime_error("Tracker invitation code is missing");
   auto enrollment = ParseEnrollment(std::string_view(response.body).substr(newline + 1));
   CreatedInvitation created;
   static_cast<TrackerEnrollment&>(created) = enrollment;
@@ -298,10 +328,27 @@ CreatedInvitation TrackerClient::CreateRoom(const std::string_view task_id, cons
   return created;
 }
 
+std::string TrackerClient::CreateInvitation(const std::string_view room_id,
+                                            const protocol::Role invited_role) {
+  if (!enrollment_.has_value() || enrollment_->room_id != room_id) {
+    throw std::invalid_argument("Tracker client is not enrolled in the invitation room");
+  }
+  const auto response = SignedPost("/v1/invitations/create",
+                                   EncodeField(room_id) + "\t" + RoleName(invited_role), true);
+  auto line = std::string_view(response.body);
+  if (!line.empty() && line.back() == '\n') line.remove_suffix(1);
+  const auto fields = Fields(line);
+  if (fields.size() != 2 || fields[0] != "INVITE") {
+    throw std::runtime_error("Tracker invitation response is invalid");
+  }
+  return DecodeField(fields[1]);
+}
+
 TrackerEnrollment TrackerClient::RedeemInvitation(const std::string_view invitation_code,
-                                                   const std::string_view task_id,
-                                                   const protocol::Role requested_role) {
-  const auto body = EncodeField(invitation_code) + "\t" + EncodeField(task_id) + "\t" + RoleName(requested_role);
+                                                  const std::string_view task_id,
+                                                  const protocol::Role requested_role) {
+  const auto body =
+      EncodeField(invitation_code) + "\t" + EncodeField(task_id) + "\t" + RoleName(requested_role);
   auto enrollment = ParseEnrollment(SignedPost("/v1/invitations/redeem", body, false).body);
   UseEnrollment(enrollment);
   return enrollment;
@@ -328,10 +375,12 @@ void TrackerClient::Forward(const RelayMessage& message) {
     throw std::invalid_argument("signal sender does not match enrolled device");
   }
   const auto body = EncodeField(enrollment_->room_id) + "\t" + KindName(message.kind) + "\t" +
-      EncodeField(message.recipient_device_id) + "\t" + EncodeField(message.payload) + "\t" +
-      EncodeField(message.candidate_mid) + "\t" + std::to_string(message.candidate_mline_index);
+                    EncodeField(message.recipient_device_id) + "\t" + EncodeField(message.payload) +
+                    "\t" + EncodeField(message.candidate_mid) + "\t" +
+                    std::to_string(message.candidate_mline_index);
   const auto response = SignedPost("/v1/signals/send", body, true);
-  if (response.body != "OK\n") throw std::runtime_error("Tracker signal acknowledgement is invalid");
+  if (response.body != "OK\n")
+    throw std::runtime_error("Tracker signal acknowledgement is invalid");
 }
 
 std::vector<RelayMessage> TrackerClient::DrainInbox(const std::string& device_id) {
@@ -341,13 +390,18 @@ std::vector<RelayMessage> TrackerClient::DrainInbox(const std::string& device_id
   const auto response = SignedPost("/v1/signals/drain", EncodeField(enrollment_->room_id), true);
   std::istringstream stream{response.body};
   std::string line;
-  if (!std::getline(stream, line) || line != "OK") throw std::runtime_error("Tracker inbox response is invalid");
+  if (!std::getline(stream, line) || line != "OK")
+    throw std::runtime_error("Tracker inbox response is invalid");
   std::vector<RelayMessage> messages;
   bool ended = false;
   while (std::getline(stream, line)) {
     const auto fields = Fields(line);
-    if (fields.size() == 1 && fields[0] == "END") { ended = true; break; }
-    if (fields.size() != 7 || fields[0] != "SIGNAL") throw std::runtime_error("Tracker signal row is invalid");
+    if (fields.size() == 1 && fields[0] == "END") {
+      ended = true;
+      break;
+    }
+    if (fields.size() != 7 || fields[0] != "SIGNAL")
+      throw std::runtime_error("Tracker signal row is invalid");
     const auto index = ParseInteger(fields[6], "candidate index");
     if (index < (std::numeric_limits<std::int32_t>::min)() ||
         index > (std::numeric_limits<std::int32_t>::max)()) {
@@ -356,7 +410,8 @@ std::vector<RelayMessage> TrackerClient::DrainInbox(const std::string& device_id
     messages.push_back({ParseKind(fields[1]), DecodeField(fields[2]), device_id,
                         DecodeField(fields[4]), DecodeField(fields[5]),
                         static_cast<std::int32_t>(index)});
-    if (DecodeField(fields[3]) != device_id) throw std::runtime_error("Tracker signal recipient is invalid");
+    if (DecodeField(fields[3]) != device_id)
+      throw std::runtime_error("Tracker signal recipient is invalid");
   }
   if (!ended) throw std::runtime_error("Tracker inbox response is incomplete");
   return messages;
