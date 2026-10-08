@@ -39,7 +39,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Enable pnpm
         shell: pwsh
-        run: corepack enable
+        run: |
+          corepack enable
+          if ($LASTEXITCODE -ne 0) { throw 'Corepack setup failed' }
+          $packageManager = (Get-Content desktop/ui/package.json -Raw | ConvertFrom-Json).packageManager
+          corepack install --global $packageManager
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned pnpm installation failed' }
+      - name: Install desktop UI dependencies
+        shell: pwsh
+        working-directory: desktop/ui
+        run: |
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed' }
       - name: Install pinned WebRTC build tools
         shell: pwsh
         run: |

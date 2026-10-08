@@ -219,3 +219,16 @@ CI and release workflows now explicitly select `windows-2022`, whose published
 inventory includes VS 2022, and execute `scripts/check-windows-toolchain.ps1`
 before dependency installation or native checkout preparation. This check fails
 early with an actionable error if the matching x64 C++ toolchain is absent.
+
+The subsequent hosted run passed C++ compilation, unit tests, local two-process
+synchronization and all three Tracker tests, then exposed a frontend setup issue:
+Corepack invoked pnpm 12 from the repository root rather than the frontend's pinned
+pnpm 9.15.4. Both workflows now install the version declared in
+`desktop/ui/package.json`; CI runs frontend commands inside that workspace.
+The workspace manifest now declares its package list for pnpm 9 compatibility.
+Release builds also install the locked frontend dependencies before Tauri hooks.
+A quoted PowerShell pipeline in the release workflow was corrected to a YAML block.
+Both workflows pass actionlint 1.7.12. A clean temporary dependency installation
+with pnpm 9.15.4 and `--frozen-lockfile` passed, as did the frontend typecheck,
+all 16 tests and production build. These local checks do not replace a completed
+hosted CI run or the still-unexecuted signed release pipeline.

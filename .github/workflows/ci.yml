@@ -16,7 +16,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Enable pnpm
         shell: pwsh
-        run: corepack enable
+        run: |
+          corepack enable
+          if ($LASTEXITCODE -ne 0) { throw 'Corepack setup failed' }
+          $packageManager = (Get-Content desktop/ui/package.json -Raw | ConvertFrom-Json).packageManager
+          corepack install --global $packageManager
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned pnpm installation failed' }
       - name: Configure
         shell: pwsh
         run: |
@@ -33,14 +38,15 @@ jobs:
         run: cargo test --locked --manifest-path tracker/Cargo.toml
       - name: Validate desktop UI
         shell: pwsh
+        working-directory: desktop/ui
         run: |
-          pnpm --dir desktop/ui install --frozen-lockfile
+          pnpm install --frozen-lockfile
           if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed' }
-          pnpm --dir desktop/ui lint
+          pnpm lint
           if ($LASTEXITCODE -ne 0) { throw 'Frontend typecheck failed' }
-          pnpm --dir desktop/ui test
+          pnpm test
           if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
-          pnpm --dir desktop/ui build
+          pnpm build
           if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
       - name: Test desktop Rust shell
         shell: pwsh
