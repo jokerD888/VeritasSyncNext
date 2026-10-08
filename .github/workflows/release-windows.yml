@@ -53,7 +53,8 @@ jobs:
           "VERITASSYNC_WEBRTC_CHECKOUT=$checkout" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Expose vcpkg to CMake presets
         shell: pwsh
-        run: "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        run: |
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
       - name: Build signed release
