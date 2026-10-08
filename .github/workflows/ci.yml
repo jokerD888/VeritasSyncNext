@@ -6,9 +6,13 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: windows-latest
+    # Match the VS 2022 generator in CMakePresets.json; latest can migrate to VS 2026.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: Verify Visual Studio 2022 toolchain
+        shell: pwsh
+        run: ./scripts/check-windows-toolchain.ps1
       - uses: dtolnay/rust-toolchain@stable
       - name: Enable pnpm
         shell: pwsh

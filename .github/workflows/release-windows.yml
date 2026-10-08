@@ -21,7 +21,8 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
+    # Both the engine CMake preset and pinned native bridge use the VS 2022 toolchain.
+    runs-on: windows-2022
     env:
       WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
@@ -32,6 +33,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Verify Visual Studio 2022 toolchain
+        shell: pwsh
+        run: ./scripts/check-windows-toolchain.ps1
       - uses: dtolnay/rust-toolchain@stable
       - name: Enable pnpm
         shell: pwsh

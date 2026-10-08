@@ -208,3 +208,14 @@ that full signed script still requires the release-owner inputs and was not exec
 
 - `desktop/src-tauri/target/release/bundle/nsis/VeritasSync Next_0.1.0-2_x64-setup.exe`
 - `desktop/src-tauri/target/release/bundle/msi/VeritasSync Next_0.1.0-2_x64_zh-CN.msi`
+
+## CI toolchain correction — 2026-10-09
+
+The first pushed CI run failed at CMake configuration, not at compilation or a
+test: its `windows-latest` runner lacked the VS 2022 instance required by the
+`Visual Studio 17 2022` preset. The hosted label now targets the VS 2026 image
+([runner label inventory](https://github.com/actions/runner-images#available-images)).
+CI and release workflows now explicitly select `windows-2022`, whose published
+inventory includes VS 2022, and execute `scripts/check-windows-toolchain.ps1`
+before dependency installation or native checkout preparation. This check fails
+early with an actionable error if the matching x64 C++ toolchain is absent.
