@@ -1,4 +1,5 @@
 #include "engine/storage/database.h"
+#include "engine/storage/ignore_policy.h"
 #include "engine/sync/bidirectional_sync.h"
 #include "engine/transport/mock_transport.h"
 #include "tests/test_framework.h"
@@ -168,4 +169,67 @@ VSYNC_TEST(BidirectionalSyncConvergesOfflineBranchesAfterBothPeersRestart) {
   const auto conflict = "restart.conflict.device-b.3.txt";
   VSYNC_CHECK(ReadBytes(directories.Left() / conflict) == std::vector<std::uint8_t>({'r', 'i', 'g', 'h', 't'}));
   VSYNC_CHECK(ReadBytes(directories.Right() / conflict) == std::vector<std::uint8_t>({'r', 'i', 'g', 'h', 't'}));
+}
+
+VSYNC_TEST(BidirectionalIgnorePolicyRecoversEveryCommitBoundaryWithoutDeletingLocalIgnoredFiles) {
+  using namespace veritassync;
+  for (int delivered = 0; delivered <= 3; ++delivered) {
+    TemporaryBidirectionalDirectories directories;
+    WriteBytes(directories.Left() / "keep.log", {'k', 'e', 'e', 'p'});
+    storage::Database left_db(directories.Db("left")), right_db(directories.Db("right"));
+    Initialize(left_db, directories.Left()); Initialize(right_db, directories.Right());
+    {
+      transport::MockNetwork network;
+      auto endpoints = network.CreatePair();
+      sync::BidirectionalSyncNode left(Config("device-a", "device-b", directories.Left(), left_db), *endpoints.first);
+      sync::BidirectionalSyncNode right(Config("device-b", "device-a", directories.Right(), right_db), *endpoints.second);
+      left.Start(); right.Start(); Drive(network, left, right);
+      left.ProposeIgnorePolicy(storage::IgnorePolicy::HashRules(""), "*.log\n", "manual");
+      for (int index = 0; index < delivered; ++index) VSYNC_CHECK(network.PumpOne());
+      // Crash before PROPOSE / ACK / COMMIT / final receipt delivery.
+    }
+    {
+      transport::MockNetwork network;
+      auto endpoints = network.CreatePair();
+      sync::BidirectionalSyncNode left(Config("device-a", "device-b", directories.Left(), left_db), *endpoints.first);
+      sync::BidirectionalSyncNode right(Config("device-b", "device-a", directories.Right(), right_db), *endpoints.second);
+      left.Start(); right.Start(); Drive(network, left, right);
+      VSYNC_CHECK(storage::IgnorePolicy::ReadRules(directories.Left()) == "*.log\n");
+      VSYNC_CHECK(storage::IgnorePolicy::ReadRules(directories.Right()) == "*.log\n");
+      VSYNC_CHECK(left_db.FindPendingIgnorePolicy("task-peer")->state == "applied");
+      VSYNC_CHECK(right_db.FindPendingIgnorePolicy("task-peer")->state == "applied");
+      VSYNC_CHECK(ReadBytes(directories.Left() / "keep.log") == std::vector<std::uint8_t>({'k','e','e','p'}));
+      VSYNC_CHECK(ReadBytes(directories.Right() / "keep.log") == std::vector<std::uint8_t>({'k','e','e','p'}));
+    }
+  }
+}
+
+VSYNC_TEST(BidirectionalIgnorePolicyRejectsSimultaneousProposalsAndMismatchedInitialRules) {
+  using namespace veritassync;
+  TemporaryBidirectionalDirectories directories;
+  storage::Database left_db(directories.Db("left")), right_db(directories.Db("right"));
+  Initialize(left_db, directories.Left()); Initialize(right_db, directories.Right());
+  {
+    transport::MockNetwork network;
+    auto endpoints = network.CreatePair();
+    sync::BidirectionalSyncNode left(Config("device-a", "device-b", directories.Left(), left_db), *endpoints.first);
+    sync::BidirectionalSyncNode right(Config("device-b", "device-a", directories.Right(), right_db), *endpoints.second);
+    left.Start(); right.Start(); Drive(network, left, right);
+    left.ProposeIgnorePolicy(storage::IgnorePolicy::HashRules(""), "*.log\n", "manual");
+    right.ProposeIgnorePolicy(storage::IgnorePolicy::HashRules(""), "*.tmp\n", "manual");
+    network.PumpUntilIdle();
+    VSYNC_CHECK(!left_db.FindPendingIgnorePolicy("task-peer"));
+    VSYNC_CHECK(!right_db.FindPendingIgnorePolicy("task-peer"));
+    VSYNC_CHECK(storage::IgnorePolicy::ReadRules(directories.Left()).empty());
+    VSYNC_CHECK(storage::IgnorePolicy::ReadRules(directories.Right()).empty());
+  }
+  WriteBytes(directories.Right() / ".veritasignore", {'*', '.', 'l', 'o', 'g'});
+  transport::MockNetwork network;
+  auto endpoints = network.CreatePair();
+  sync::BidirectionalSyncNode left(Config("device-a", "device-b", directories.Left(), left_db), *endpoints.first);
+  sync::BidirectionalSyncNode right(Config("device-b", "device-a", directories.Right(), right_db), *endpoints.second);
+  left.Start(); right.Start(); network.PumpUntilIdle();
+  VSYNC_CHECK(left.LastError().has_value());
+  VSYNC_CHECK(right.LastError().has_value());
+  VSYNC_CHECK(!left.IsConverged());
 }

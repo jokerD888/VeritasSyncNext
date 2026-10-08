@@ -1,6 +1,10 @@
 #pragma once
 
 #include "engine/transport/peer_transport.h"
+#include "engine/transport/ice_options.h"
+#include "engine/transport/frame_fragments.h"
+#include <array>
+#include <deque>
 
 #include <filesystem>
 #include <functional>
@@ -10,7 +14,8 @@
 namespace veritassync::transport {
 class WebRtcTransport final : public PeerTransport {
  public:
-  explicit WebRtcTransport(const std::filesystem::path& bridge_path, bool initiator = true);
+  explicit WebRtcTransport(const std::filesystem::path& bridge_path, bool initiator = true,
+                           const IceOptions& options = {});
   ~WebRtcTransport() override;
   WebRtcTransport(const WebRtcTransport&) = delete;
   void Send(protocol::Channel channel, std::vector<std::uint8_t> wire) override;
@@ -21,10 +26,13 @@ class WebRtcTransport final : public PeerTransport {
   void SetIceCallback(IceCallback callback);
   void SetRemoteDescriptionCallback(RemoteDescriptionCallback callback);
   void CreateOffer();
+  void RestartIce() override;
+  void Pump() override;
   void ApplyRemoteOffer(std::string sdp);
   void ApplyRemoteAnswer(std::string sdp);
   void ApplyRemoteIceCandidate(const IceCandidate& candidate);
   [[nodiscard]] bool IsReady() const;
+  [[nodiscard]] std::string DiagnosticState() const;
 
  private:
   static void __cdecl Receive(void* context, std::uint32_t channel, const std::uint8_t* bytes,
@@ -42,6 +50,7 @@ class WebRtcTransport final : public PeerTransport {
   void* send_bulk_ = nullptr;
   void* destroy_ = nullptr;
   void* create_offer_ = nullptr;
+  void* restart_ice_ = nullptr;
   void* apply_offer_ = nullptr;
   void* apply_answer_ = nullptr;
   void* apply_ice_ = nullptr;
@@ -54,5 +63,11 @@ class WebRtcTransport final : public PeerTransport {
   SdpCallback answer_callback_;
   IceCallback ice_callback_;
   RemoteDescriptionCallback remote_description_callback_;
+  std::array<std::deque<std::vector<std::uint8_t>>, 2> outgoing_;
+  std::array<std::size_t, 2> queued_bytes_{};
+  std::array<FrameReassembler, 2> reassembly_;
+  std::uint64_t next_message_id_ = 1;
+  mutable std::mutex wire_mutex_;
+  std::optional<std::string> wire_error_;
 };
 }  // namespace veritassync::transport

@@ -7,8 +7,9 @@ synchronization. One authoritative source can share one scanned manifest revisio
 with multiple independent targets; each target has its own transfer queue and
 backpressure budget. Phase 4 additionally provides two-peer bidirectional
 synchronization with durable Lamport clocks, version ancestry, deterministic
-conflict copies, and restart-safe convergence. A production Tracker and
-cross-network WebRTC DataChannel validation remain pending.
+conflict copies, and restart-safe convergence. The Rust Tracker service is included
+in `tracker/`; production deployment still requires HTTPS termination and a
+two-host WebRTC/TURN acceptance run before public release.
 
 The storage layer also exposes a Phase 2 safety primitive: received files are written
 as same-directory `*.part` files, flushed, then atomically replaced under the task
@@ -22,7 +23,20 @@ Install vcpkg, set `VCPKG_ROOT`, then run:
 cmake --preset default
 cmake --build --preset default
 ctest --preset default
+./scripts/test-local-sync.ps1
 ```
+
+The last command starts two isolated diagnostic processes over loopback TCP. It
+exercises the production sync/storage/watcher/IPC code, including restart recovery,
+but does not substitute for native WebRTC DataChannel validation. See
+[`docs/LOCAL_VERIFICATION.md`](docs/LOCAL_VERIFICATION.md) for the verified scope
+and remaining environment-dependent checks.
+
+With the pinned native bridge built, `scripts/test-native-sync.ps1 -WebRtcBridge
+<dll>` exercises separate production engines through a live loopback Tracker and
+real DataChannels. `scripts/test-local-turn.ps1 -WebRtcBridge <dll>` additionally
+tests relay-only UDP/TCP using an isolated coturn container in an existing WSL
+Docker environment. Neither script substitutes for cross-network acceptance.
 
 ## Headless CLI
 

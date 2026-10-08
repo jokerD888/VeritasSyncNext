@@ -51,7 +51,7 @@ class Reader {
   void Need(std::size_t count) const { if (count > bytes_.size() - position_) throw std::invalid_argument("truncated payload"); }
   std::span<const std::uint8_t> bytes_; std::size_t position_ = 0;
 };
-bool ValidType(std::uint8_t type) { return type == 1 || type == 2 || type == 3 || type == 4 || type == 5 || type == 6 || type == 7 || type == 64 || type == 65 || type == 66; }
+bool ValidType(std::uint8_t type) { return (type >= 1 && type <= 13) || type == 64 || type == 65 || type == 66; }
 
 [[nodiscard]] std::size_t StringSize(const std::string_view value) {
   return sizeof(std::uint16_t) + value.size();
@@ -59,6 +59,21 @@ bool ValidType(std::uint8_t type) { return type == 1 || type == 2 || type == 3 |
 }
 
 bool IsAllowedOn(Channel channel, FrameType type) { return channel == Channel::kControl ? static_cast<std::uint8_t>(type) < 64 : static_cast<std::uint8_t>(type) >= 64; }
+std::vector<std::uint8_t> EncodeIgnorePolicy(const IgnorePolicyMessage& policy) {
+  if (policy.rules.size() > 16384 || policy.base_hash.size() != 64 || policy.proposal_id.size() > 64)
+    throw std::invalid_argument("invalid ignore policy message");
+  Writer writer;
+  writer.String(policy.proposal_id); writer.String(policy.base_hash); writer.String(policy.rules); writer.String(policy.source);
+  return writer.Take();
+}
+IgnorePolicyMessage DecodeIgnorePolicy(std::span<const std::uint8_t> payload) {
+  Reader reader(payload);
+  IgnorePolicyMessage policy{reader.String(), reader.String(), reader.String(), reader.String()};
+  reader.Finish();
+  if (policy.rules.size() > 16384 || policy.base_hash.size() != 64 || policy.proposal_id.size() > 64)
+    throw std::invalid_argument("invalid ignore policy message");
+  return policy;
+}
 std::vector<std::uint8_t> EncodeFrame(const Frame& frame) {
   if (!ValidType(static_cast<std::uint8_t>(frame.type)) || frame.payload.size() > kMaxFrameSize - kFrameHeaderSize) throw std::invalid_argument("invalid frame");
   Writer writer(kFrameHeaderSize + frame.payload.size()); writer.U8('V'); writer.U8('S'); writer.U8(kProtocolVersion); writer.U8(static_cast<std::uint8_t>(frame.type)); writer.U64(frame.request_id); writer.U32(static_cast<std::uint32_t>(frame.payload.size())); writer.Bytes(frame.payload); return writer.Take();

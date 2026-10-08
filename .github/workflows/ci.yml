@@ -9,9 +9,37 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Enable pnpm
+        shell: pwsh
+        run: corepack enable
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DCMAKE_CXX_CLANG_TIDY=clang-tidy
+        shell: pwsh
+        run: |
+          $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
+          cmake --preset default -DCMAKE_CXX_CLANG_TIDY=clang-tidy
       - name: Build
-        run: cmake --build build --config Debug --parallel
+        run: cmake --build --preset default --parallel
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --preset default --output-on-failure
+      - name: Test local two-process synchronization
+        shell: pwsh
+        run: ./scripts/test-local-sync.ps1
+      - name: Test Tracker
+        run: cargo test --locked --manifest-path tracker/Cargo.toml
+      - name: Validate desktop UI
+        shell: pwsh
+        run: |
+          pnpm --dir desktop/ui install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed' }
+          pnpm --dir desktop/ui lint
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend typecheck failed' }
+          pnpm --dir desktop/ui test
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
+          pnpm --dir desktop/ui build
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
+      - name: Test desktop Rust shell
+        shell: pwsh
+        run: |
+          ./scripts/stage-desktop-engine.ps1
+          cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml

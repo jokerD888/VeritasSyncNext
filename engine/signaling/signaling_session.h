@@ -4,6 +4,7 @@
 #include "engine/transport/peer_transport.h"
 
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,12 +17,15 @@ class SignalingSession {
  public:
   SignalingSession(SignalingRelay& relay, std::string local_device_id, std::string remote_device_id,
                    transport::PeerTransport& transport);
+  ~SignalingSession();
   void StartOffer();
+  void RestartIce();
   void Pump();
+  // A changed DTLS certificate means a new remote PeerConnection, not an ICE
+  // restart. The owner must replace this peer before applying its description.
+  [[nodiscard]] std::vector<RelayMessage> TakeResetMessages();
 
  private:
-  void Queue(MessageKind kind, std::string payload);
-  void QueueIce(transport::PeerTransport::IceCandidate candidate);
   void ApplyMessage(const RelayMessage& message);
   void ApplyReadyCandidates();
 
@@ -29,10 +33,11 @@ class SignalingSession {
   std::string local_device_id_;
   std::string remote_device_id_;
   transport::PeerTransport& transport_;
-  std::mutex mutex_;
-  std::vector<RelayMessage> outbound_;
+  struct CallbackState;
+  std::shared_ptr<CallbackState> callback_state_;
   std::vector<transport::PeerTransport::IceCandidate> pending_ice_;
-  std::optional<bool> remote_description_result_;
+  std::string remote_certificate_;
+  std::vector<RelayMessage> reset_messages_;
 };
 
 }  // namespace veritassync::signaling

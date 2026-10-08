@@ -52,7 +52,7 @@ VSYNC_TEST(IpcServiceCreatesListsDeletesTasksAndRejectsBadVersions) {
   const auto tasks = service.Handle("VSYNC_IPC/1\tlist_tasks");
   VSYNC_CHECK(tasks.find("ROW\tdemo\tone_way\tsource\tC:/sync") != std::string::npos);
   const auto dashboard = service.Handle("VSYNC_IPC/1\tdashboard\t10");
-  VSYNC_CHECK(dashboard.starts_with("OK\t7\t1\n"));
+  VSYNC_CHECK(dashboard.starts_with("OK\t8\t1\n"));
   VSYNC_CHECK(dashboard.find("TASK\tdemo\tone_way\tsource\tC:/sync") != std::string::npos);
   VSYNC_CHECK(dashboard.find("EVENT\t") != std::string::npos);
   VSYNC_CHECK(service.Handle("VSYNC_IPC/1\tlist_conflicts") == "END\n");
@@ -112,6 +112,6 @@ VSYNC_TEST(IpcServicePreviewsAndAppliesVersionedIgnorePoliciesForSourcesOnly) {
   const auto peer = service.Handle("VSYNC_IPC/1\tignore_get\tpeer");
   const auto peer_hash = ResponseField(peer, 2);
   VSYNC_CHECK(service.Handle("VSYNC_IPC/1\tignore_apply\tpeer\t" + peer_hash + "\t*.tmp%0A\tmanual")
-                  .starts_with("ERR\tbidirectional ignore policy requires peer negotiation"));
+                  .starts_with("ERR\tbidirectional ignore policy requires a connected peer"));
   std::filesystem::remove_all(root);
 }

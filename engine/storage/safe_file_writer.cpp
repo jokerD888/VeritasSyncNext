@@ -1,8 +1,11 @@
 #include "engine/storage/safe_file_writer.h"
+#include "engine/common/path.h"
 
 #include <Windows.h>
 
 #include <atomic>
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <fstream>
 #include <limits>
@@ -102,7 +105,7 @@ std::filesystem::path ResolveTaskPath(const std::filesystem::path& task_root,
   if (error || !std::filesystem::is_directory(root)) {
     throw std::invalid_argument("task root must be an existing directory");
   }
-  const std::filesystem::path relative{relative_path};
+  const auto relative = common::Utf8Path(relative_path);
   if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory()) {
     throw std::invalid_argument("absolute paths are not allowed");
   }
@@ -110,6 +113,15 @@ std::filesystem::path ResolveTaskPath(const std::filesystem::path& task_root,
     if (component.empty() || component == "." || component == "..") {
       throw std::invalid_argument("path traversal is not allowed");
     }
+    auto name = common::PathUtf8(component);
+    if (name.back() == ' ' || name.back() == '.' || name.find(':') != std::string::npos ||
+        std::ranges::any_of(name, [](unsigned char value) { return value < 32 || value == 127; }))
+      throw std::invalid_argument("Windows path component is invalid");
+    name = name.substr(0, name.find('.'));
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char value) { return static_cast<char>(std::toupper(value)); });
+    if (name == "CON" || name == "PRN" || name == "AUX" || name == "NUL" ||
+        (name.size() == 4 && (name.starts_with("COM") || name.starts_with("LPT")) && name[3] >= '1' && name[3] <= '9'))
+      throw std::invalid_argument("Windows device names are not allowed");
   }
   const auto candidate = (root / relative).lexically_normal();
   if (!IsDescendant(root, candidate) || candidate == root) {

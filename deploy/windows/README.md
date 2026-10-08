@@ -20,17 +20,21 @@ substituted for a trusted release certificate.
 ## Build order
 
 ```powershell
-cmake --preset default
-cmake --build --preset default --config Release
-ctest --preset default -C Release --output-on-failure
-./scripts/stage-desktop-engine.ps1 -BuildDirectory ./build/default/Release
-cd desktop/src-tauri
-cargo tauri build
+./scripts/bootstrap-webrtc.ps1 -CheckoutRoot C:\src\veritassync-webrtc
+./deploy/windows/build-release.ps1 -WebRtcCheckoutRoot C:\src\veritassync-webrtc
 ```
 
 Release packaging must explicitly stage `build/default/Release`. The default
 sidecar staging path remains Debug for `cargo tauri dev` and must not be used by
-the installer pipeline.
+the installer pipeline. The release script builds the pinned WebRTC bridge,
+executes its C ABI tests, and stages `veritassync_webrtc_bridge.dll` beside the
+engine before signing either sidecar copy.
+
+Before packaging, the release script also builds the local test Tracker and runs
+`scripts/test-native-sync.ps1` against separate production Release engine processes.
+This checks native bidirectional/multi-target sync and crash/restart recovery.
+Local TURN testing is separately reproducible with `scripts/test-local-turn.ps1`
+when an existing WSL Docker daemon is available; it is not required on every CI host.
 
 The bundle includes the engine as a sidecar. The first shell launch starts the
 named-pipe server; later shell launches reuse it. SQLite migrations remain owned
@@ -43,6 +47,13 @@ updater endpoint and public key. The release script signs and verifies both
 staged engine copies *before* Tauri bundles them, then signs/verifies the desktop
 executable and MSI/NSIS output. It discovers the x64 `signtool.exe` from a
 Windows SDK installation when it is not on `PATH`.
+
+Authenticode changes installer bytes. After that step the script regenerates
+each updater `.sig` using `cargo tauri signer sign`, so it signs the final artifact
+rather than publishing the signature produced before Authenticode. The private
+key remains in the process environment, not command-line arguments. See the
+[official signer CLI reference](https://v2.tauri.app/reference/cli/#signer-sign).
+This ordering still needs execution with the release owner's signing credentials.
 
 Publish the signed update artifacts and manifest atomically. Do not publish an
 update manifest before every referenced signed artifact is available.

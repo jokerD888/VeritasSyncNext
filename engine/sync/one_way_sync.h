@@ -50,6 +50,7 @@ class OneWaySyncNode {
   [[nodiscard]] bool HandshakeComplete() const;
   [[nodiscard]] bool TargetIsConverged() const;
   [[nodiscard]] std::size_t PendingDownloadCount() const;
+  [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> DownloadProgress() const;
   [[nodiscard]] TransferStatistics Statistics() const;
   [[nodiscard]] std::optional<std::string> LastError() const;
 

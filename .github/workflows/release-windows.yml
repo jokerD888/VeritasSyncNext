@@ -33,6 +33,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Enable pnpm
+        shell: pwsh
+        run: corepack enable
+      - name: Install pinned WebRTC build tools
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$env:RUNNER_TEMP\depot_tools"
+          "$env:RUNNER_TEMP\depot_tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Bootstrap pinned WebRTC checkout
+        shell: pwsh
+        run: |
+          $checkout = Join-Path $env:RUNNER_TEMP "veritassync-webrtc"
+          ./scripts/bootstrap-webrtc.ps1 -CheckoutRoot $checkout
+          "VERITASSYNC_WEBRTC_CHECKOUT=$checkout" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Expose vcpkg to CMake presets
         shell: pwsh
         run: "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

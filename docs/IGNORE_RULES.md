@@ -28,15 +28,23 @@ owns the complete policy lifecycle through versioned `VSYNC_IPC/1` commands:
 
 A preview reports newly ignored and newly included paths separately. It also compares
 the proposal with the durable file manifest. If an already tracked path becomes
-ignored, its next source scan will create a deletion record; the desktop therefore
-requires an explicit second confirmation. Inventories and sample lists are bounded,
+ignored, its next one-way source scan will create a deletion record; the desktop therefore
+requires an explicit second confirmation. Bidirectional policies instead exclude
+the path from version exchange and preserve existing local copies. Inventories and sample lists are bounded,
 and validation rejects more than 128 rules, more than 16 KiB total content, malformed
 character classes, control characters, and oversized lines.
 
 One-way Source tasks may edit policy. One-way Targets are read-only because their
-policy belongs to the authoritative Source. A bidirectional task is also read-only
-until a peer protocol provides `PROPOSE / ACK / COMMIT` policy negotiation; silently
-changing one peer would otherwise produce divergent manifests.
+policy belongs to the authoritative Source. An enabled, connected bidirectional
+task may edit or undo policy through `PROPOSE / ACK / COMMIT / DONE` negotiation.
+Both peers validate the common base hash and durably record the transaction before
+acknowledging it. Scanning and transfer dispatch pause while a decision is pending;
+reconnect retries the durable decision instead of silently changing only one peer.
+Concurrent proposals are rejected safely. Offline bidirectional tasks remain
+read-only. Peers with different initial policies refuse to exchange manifests;
+align their `.veritasignore` files while stopped before connecting them. External
+policy edits during an active bidirectional task are rejected, not converted into
+deletions. Existing ignored files are retained locally.
 
 ## AI-assisted proposals
 

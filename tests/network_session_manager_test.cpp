@@ -17,6 +17,8 @@ struct TrackerFixture {
   std::string remote_device = std::string(32, 'b');
   std::string remote_fingerprint = std::string(64, 'c');
   std::atomic_size_t offers{0};
+  std::string local_role = "source", remote_role = "target";
+  bool extra_target = false;
 };
 
 class SessionHttp final : public veritassync::signaling::TrackerHttpTransport {
@@ -28,9 +30,10 @@ class SessionHttp final : public veritassync::signaling::TrackerHttpTransport {
     if (path == "/v1/rooms/join") {
       return {200, "OK\troom-1\t" + std::string(64, 'a') +
                        "\tsession\t9999999999999\tMEMBERS\nMEMBER\t" + fixture_->local_device +
-                       "\t" + fixture_->local_fingerprint + "\tsource\nMEMBER\t" +
+                       "\t" + fixture_->local_fingerprint + "\t" + fixture_->local_role + "\nMEMBER\t" +
                        fixture_->remote_device + "\t" + fixture_->remote_fingerprint +
-                       "\ttarget\nEND\n"};
+                       "\t" + fixture_->remote_role + "\n" +
+                       (fixture_->extra_target ? "MEMBER\t" + std::string(32, 'd') + "\t" + std::string(64, 'e') + "\ttarget\n" : "") + "END\n"};
     }
     if (path == "/v1/signals/send") {
       ++fixture_->offers;
@@ -46,11 +49,13 @@ class SessionHttp final : public veritassync::signaling::TrackerHttpTransport {
 
 struct TransportFixture {
   std::atomic_size_t frames{0};
+  bool ready = false;
+  bool never_ready = false;
 };
 class ReadyPeerTransport final : public veritassync::transport::PeerTransport {
  public:
   explicit ReadyPeerTransport(std::shared_ptr<TransportFixture> fixture)
-      : fixture_(std::move(fixture)) {}
+      : fixture_(std::move(fixture)) { ready_ = fixture_->ready; }
   void Send(veritassync::protocol::Channel, std::vector<std::uint8_t>) override {
     ++fixture_->frames;
   }
@@ -61,10 +66,11 @@ class ReadyPeerTransport final : public veritassync::transport::PeerTransport {
   void SetIceCallback(IceCallback) override {}
   void SetRemoteDescriptionCallback(RemoteDescriptionCallback) override {}
   void CreateOffer() override {
-    ready_ = true;
+    ready_ = !fixture_->never_ready;
     if (offer_) offer_("v=0");
   }
   void ApplyRemoteOffer(std::string) override {}
+  void RestartIce() override { CreateOffer(); }
   void ApplyRemoteAnswer(std::string) override { ready_ = true; }
   void ApplyRemoteIceCandidate(const IceCandidate&) override {}
   bool IsReady() const override { return ready_; }
@@ -133,4 +139,72 @@ VSYNC_TEST(NetworkSessionManagerConnectsPairedSourceToSyncNode) {
   std::filesystem::remove(database_path);
   std::filesystem::remove(database_path.string() + "-shm");
   std::filesystem::remove(database_path.string() + "-wal");
+}
+
+VSYNC_TEST(NetworkSessionManagerTargetConnectsOnlyToSourceInMultiTargetRoom) {
+  using namespace veritassync;
+  const auto root = std::filesystem::temp_directory_path() / ("veritassync-topology-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directory(root);
+  const auto path = root / "state.db";
+  const auto sync_root = root / "sync";
+  std::filesystem::create_directory(sync_root);
+  {
+    storage::Database database(path); database.ApplyMigrations();
+    database.CreateTask({"network", "one_way", "target", sync_root.string()});
+    database.ConfigureTaskConnection({"network", "https://tracker.example", "room-1", std::string(64,'a'), 1});
+    auto identity = security::DeviceIdentity::Generate();
+    auto tracker = std::make_shared<TrackerFixture>();
+    tracker->local_device = identity.DeviceId(); tracker->local_fingerprint = identity.Fingerprint();
+    tracker->local_role = "target"; tracker->remote_role = "source"; tracker->extra_target = true;
+    security::PairingService pairing(database, std::move(identity), [tracker] { return std::make_unique<SessionHttp>(tracker); });
+    auto transport = std::make_shared<TransportFixture>(); transport->ready = true;
+    std::atomic_size_t sessions{0};
+    runtime::NetworkSessionManager manager(database, pairing, [&](bool initiator) {
+      VSYNC_CHECK(!initiator); ++sessions; return std::make_unique<ReadyPeerTransport>(transport);
+    });
+    manager.Start();
+    VSYNC_CHECK(WaitUntil([&] { std::scoped_lock lock(database.AccessMutex()); return database.RuntimeState("network").network_status == "online"; }));
+    VSYNC_CHECK(sessions == 1);
+    manager.Stop();
+  }
+  std::filesystem::remove_all(root);
+}
+
+VSYNC_TEST(NetworkSessionManagerRetriesOnlyTheUnavailableTarget) {
+  using namespace veritassync;
+  const auto root = std::filesystem::temp_directory_path() / ("veritassync-peer-retry-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(root / "sync");
+  {
+    storage::Database database(root / "state.db"); database.ApplyMigrations();
+    database.CreateTask({"network", "one_way", "source", (root / "sync").string()});
+    database.ConfigureTaskConnection({"network", "https://tracker.example", "room-1", std::string(64, 'a'), 1});
+    auto identity = security::DeviceIdentity::Generate();
+    auto tracker = std::make_shared<TrackerFixture>();
+    tracker->local_device = identity.DeviceId(); tracker->local_fingerprint = identity.Fingerprint();
+    tracker->extra_target = true;
+    security::PairingService pairing(database, std::move(identity), [tracker] { return std::make_unique<SessionHttp>(tracker); });
+    auto healthy = std::make_shared<TransportFixture>();
+    auto unavailable = std::make_shared<TransportFixture>(); unavailable->never_ready = true;
+    std::atomic_size_t created{0};
+    runtime::NetworkSessionOptions options;
+    options.pump_interval = std::chrono::milliseconds(10);
+    options.tracker_poll_interval = std::chrono::milliseconds(20);
+    options.connection_timeout = std::chrono::milliseconds(100);
+    runtime::NetworkSessionManager manager(database, pairing, [&](bool) {
+      return std::make_unique<ReadyPeerTransport>(created.fetch_add(1) == 0 ? healthy : unavailable);
+    }, options);
+    manager.Start();
+    VSYNC_CHECK(WaitUntil([&] { return created.load() >= 4; }));
+    // A task-wide rebuild would replace the first (healthy) transport, leaving
+    // this fixture with zero ready peers. Retrying only the failed peer keeps it.
+    VSYNC_CHECK(manager.Metrics("network").connected_peers == 1);
+    {
+      std::scoped_lock lock(database.AccessMutex());
+      VSYNC_CHECK(database.RuntimeState("network").network_status == "online");
+    }
+    manager.Stop();
+  }
+  std::filesystem::remove_all(root);
 }

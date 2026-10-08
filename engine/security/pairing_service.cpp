@@ -1,3 +1,4 @@
+#include "engine/common/path.h"
 #include "engine/security/pairing_service.h"
 
 #include <algorithm>
@@ -141,7 +142,7 @@ ParsedInvitation PairingService::ParseInvitation(const std::string_view token) {
 storage::TaskConnection PairingService::JoinInvitation(const std::string& token,
                                                        const std::string& local_root) {
   const auto invitation = ParseInvitation(token);
-  if (local_root.empty() || !std::filesystem::is_directory(local_root)) {
+  if (local_root.empty() || !std::filesystem::is_directory(common::Utf8Path(local_root))) {
     throw std::invalid_argument("pairing root must be an existing directory");
   }
   const auto role = ParseRole(invitation.invited_role);
@@ -156,8 +157,8 @@ storage::TaskConnection PairingService::JoinInvitation(const std::string& token,
       created_task = true;
       task = database_.FindTask(invitation.task_id);
     } else if (task->mode != invitation.topology || task->role != invitation.invited_role ||
-               std::filesystem::weakly_canonical(task->root_path) !=
-                   std::filesystem::weakly_canonical(local_root)) {
+               std::filesystem::weakly_canonical(common::Utf8Path(task->root_path)) !=
+                   std::filesystem::weakly_canonical(common::Utf8Path(local_root))) {
       throw std::invalid_argument("existing task does not match invitation and local root");
     }
   }

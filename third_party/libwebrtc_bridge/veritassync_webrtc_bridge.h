@@ -12,7 +12,15 @@
 extern "C" {
 #endif
 
-enum { VSYNC_WEBRTC_BRIDGE_ABI_VERSION = 1 };
+enum { VSYNC_WEBRTC_BRIDGE_ABI_VERSION = 2 };
+typedef struct VsyncWebRtcIceServer {
+  const char* url;
+  const char* username;
+  const char* credential;
+} VsyncWebRtcIceServer;
+VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeConfigureIce(
+    void* factory, const VsyncWebRtcIceServer* servers, uint32_t count, uint32_t relay_only);
+VSYNC_WEBRTC_BRIDGE_EXPORT uint32_t VeritasSyncWebRtcBridgeRestartIce(void* factory);
 typedef void(__cdecl* VsyncWebRtcBridgeSdpCallback)(void* context, const char* sdp, uint32_t length);
 typedef void(__cdecl* VsyncWebRtcBridgeIceCallback)(void* context, const char* mid, uint32_t mid_length,
                                                      int32_t mline_index, const char* candidate,

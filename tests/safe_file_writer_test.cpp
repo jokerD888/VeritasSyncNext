@@ -1,4 +1,5 @@
 #include "engine/storage/safe_file_writer.h"
+#include "engine/common/path.h"
 #include "engine/common/content_hash.h"
 #include "tests/test_framework.h"
 
@@ -45,6 +46,24 @@ VSYNC_TEST(SafeFileWriterCommitsOnlyFinalFileUnderTaskRoot) {
   for (const auto& entry : std::filesystem::directory_iterator(final_path.parent_path())) {
     VSYNC_CHECK(entry.path().extension() != ".part");
   }
+}
+
+VSYNC_TEST(SafeFileWriterPreservesUnicodeRootAndRelativePath) {
+  using namespace veritassync;
+  TemporaryDirectory directory;
+  const auto root = directory.Path() / std::filesystem::path(u8"同步🙂");
+  std::filesystem::create_directory(root);
+  const auto relative = common::PathUtf8(std::filesystem::path(u8"照片/你好🙂.txt"));
+  storage::SafeFileWriter writer(root);
+  const std::vector<std::uint8_t> bytes{1, 2, 3};
+  writer.WriteAtomically(relative, bytes);
+  VSYNC_CHECK(ReadBytes(root / common::Utf8Path(relative)) == bytes);
+}
+VSYNC_TEST(SafeFileWriterRejectsWindowsDevicesAndAlternateDataStreams) {
+  TemporaryDirectory directory;
+  using veritassync::storage::ResolveTaskPath;
+  for (const auto* name : {"NUL", "con.txt", "COM1.log", "dir/LPT9", "file.txt:secret", "trailing.", "trailing "})
+    VSYNC_CHECK_THROWS(ResolveTaskPath(directory.Path(), name));
 }
 
 VSYNC_TEST(SafeFileWriterRejectsEscapingPaths) {

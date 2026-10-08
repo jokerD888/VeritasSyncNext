@@ -26,6 +26,8 @@ class PeerTransport : public Transport {
   virtual void SetIceCallback(IceCallback callback) = 0;
   virtual void SetRemoteDescriptionCallback(RemoteDescriptionCallback callback) = 0;
   virtual void CreateOffer() = 0;
+  virtual void RestartIce() = 0;
+  virtual void Pump() {}
   virtual void ApplyRemoteOffer(std::string sdp) = 0;
   virtual void ApplyRemoteAnswer(std::string sdp) = 0;
   virtual void ApplyRemoteIceCandidate(const IceCandidate& candidate) = 0;

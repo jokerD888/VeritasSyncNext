@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 namespace veritassync::sync {
@@ -44,6 +45,10 @@ ReconcileResult SnapshotReconciler::Apply(storage::Database& database,
     throw std::invalid_argument("reconciliation snapshot must be path-sorted");
   }
   const auto known = database.ListFileRecords(config.task_id);
+  const auto task = database.FindTask(config.task_id);
+  const bool versioned = task.has_value() && task->mode == "bidirectional";
+  std::unordered_map<std::string, const storage::FileRecord*> previous;
+  for (const auto& record : known) previous.emplace(record.relative_path, &record);
   const auto diff = DiffManifest(snapshot, known);
   ReconcileResult result{diff.created_or_changed.size(), diff.deleted_paths.size()};
   std::vector<storage::FileRecord> upserts;
@@ -76,10 +81,21 @@ ReconcileResult SnapshotReconciler::Apply(storage::Database& database,
   }
   if (upserts.empty() && diff.deleted_paths.empty()) return result;
   database.InTransaction([&] {
-    for (const auto& record : upserts) database.UpsertFileRecord(record);
+    for (auto& record : upserts) {
+      const auto old = previous.find(record.relative_path);
+      if (versioned && (old == previous.end() || old->second->version_id != record.version_id)) {
+        record.logical_clock = database.AdvanceLogicalClock(config.task_id);
+        database.RecordVersionLineage({config.task_id, record.version_id,
+            old == previous.end() ? std::nullopt : std::optional<std::string>(old->second->version_id)});
+      }
+      database.UpsertFileRecord(record);
+    }
     for (const auto& path : diff.deleted_paths) {
-      database.RecordTombstone(config.task_id, path, version_id_generator_(), config.origin_device_id,
-                               config.logical_clock, config.now_ms);
+      const auto version = version_id_generator_();
+      const auto clock = versioned ? database.AdvanceLogicalClock(config.task_id) : config.logical_clock;
+      if (versioned) database.RecordVersionLineage({config.task_id, version, previous.at(path)->version_id});
+      database.RecordTombstone(config.task_id, path, version, config.origin_device_id,
+                               clock, config.now_ms);
     }
   });
   return result;

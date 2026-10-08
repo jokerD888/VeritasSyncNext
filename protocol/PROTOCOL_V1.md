@@ -22,6 +22,10 @@ Control frames use `HELLO (1)`, `MANIFEST (2)`, `ERROR (3)`, `HEARTBEAT (4)`,
 `CANCEL (6)` terminates a transfer with a stable reason code.
 `VERSION_MANIFEST (7)` is the Phase 4 bidirectional snapshot and carries the
 causal version metadata required for deterministic conflict handling.
+`POLICY_HELLO (8)`, `POLICY_PROPOSE (9)`, `POLICY_ACK (10)`,
+`POLICY_COMMIT (11)`, `POLICY_DONE (12)`, and `POLICY_REJECT (13)` are the
+bidirectional ignore-policy extension. Both bidirectional peers must support it;
+older peers reject these types and are not compatible with this extension.
 Bulk frames use `CHUNK (64)`, `CHUNK_ACK (65)`, `WINDOW_UPDATE (66)`. A transport
 must not accept a control type on the bulk channel or vice versa.
 
@@ -75,11 +79,41 @@ transfer_id[16] | file_hash[32] | offset:u64 | chunk_length:u32 |
 chunk_hash[32] | bytes[chunk_length]
 ```
 
-The initial logical chunk target is 256 KiB. A future DataChannel adapter may slice
-an encoded chunk to meet its message limit, but must reconstruct this application
+The logical chunk target is 256 KiB. The WebRTC adapter slices
+an encoded chunk to meet its message limit and reconstructs this application
 frame before handing it to the engine. `chunk_hash` is BLAKE3(bytes); a receiver
 verifies that `chunk_length` equals the remaining payload size and that the chunk hash
 matches its bytes before writing.
+
+## Bidirectional policy extension
+
+All policy messages encode `proposal_id:string | base_hash:string | rules:string |
+source_device:string` (u16 byte-length strings). The proposal ID is bounded to 64
+bytes, base hash is a 64-character policy hash, and rules are bounded to 16 KiB.
+`POLICY_HELLO` checks the initial policy before version manifests are exchanged.
+The receiver persists a prepared record before ACK; the proposer persists the
+commit decision before replacing its file and sending COMMIT. The receiver applies
+the revision atomically and sends DONE. Applied receipts make retries idempotent.
+Pending records survive process restarts and block scans/transfer dispatch until
+the decision is completed or rejected. A timeout does not roll back a committed
+decision. Initial hash mismatch or concurrent proposals fail explicitly.
+
+## WebRTC fragment envelope (bridge ABI 2)
+
+Each DataChannel message uses a separate transport envelope:
+
+```text
+magic[2] = 'V' 'F' | fragment_version:u8 = 2 | reserved:u8 = 0 |
+message_id:u64 | frame_length:u32 | offset:u32 | bytes[]
+```
+
+Messages are at most 16 KiB including the 20-byte header. Offsets are multiples
+of 16 KiB minus 20 bytes. Reassembly supports unordered delivery, checks duplicate
+bytes, caps each channel at 32 pending frames/32 MiB, and expires inactive partial
+frames after 60 seconds. The sender bounds its total queue to 32 MiB and drains
+below a 512 KiB native-channel watermark. This envelope is not the application
+protocol version and is not compatible with the old unfragmented bridge. Rebuild
+and deploy ABI 2 bridges on both peers together.
 
 ## FILE_REQUEST v1 payload
 

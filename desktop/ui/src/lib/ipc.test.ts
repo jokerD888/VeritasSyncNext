@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { frameRows, ignorePreviewNeedsConfirmation, parseDashboard, parseDeviceIdentity, parseEvents, parseIgnorePolicy, parseIgnorePreview, parseJoinedInvitation, parsePairingInvitation, parseStatus, parseTasks } from "./ipc";
 
 describe("IPC text frame adapter", () => {
+  it("attaches validated live transfer metrics to the correct task", () => {
+    const reply = "OK\t7\t1\nTASK\ta\tbidirectional\tpeer\tD:/sync\nMETRICS\ta\t1024\t2048\t50\t60\t2\t32\t1\nEND\n";
+    expect(parseDashboard(reply).tasks[0].metrics).toMatchObject({ bytesSent: 1024, bytesReceived: 2048,
+      sendBytesPerSecond: 50, receiveBytesPerSecond: 60, pendingDownloads: 2, bufferedBytes: 32, connectedPeers: 1 });
+    expect(() => parseDashboard(reply.replace("\t50\t", "\tNaN\t"))).toThrow();
+  });
   it("keeps row parsing independent from newlines and terminal END frames", () => {
     expect(frameRows("ROW\talpha\tone_way\tsource\tD:%5CData\nEND\n")).toEqual([["alpha", "one_way", "source", "D:\\Data"]]);
   });

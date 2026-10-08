@@ -1,3 +1,4 @@
+#include "engine/common/path.h"
 #include "engine/storage/database.h"
 #include "engine/storage/ignore_rules.h"
 #include "engine/storage/manifest_scanner.h"
@@ -53,7 +54,8 @@ void Usage() {
       << "Usage: veritassync-engine --headless --db <path> [--init-task <id> --mode "
          "<one_way|bidirectional> --role <source|target|peer> --root <path>] [--scan-task <id> "
          "--device-id <id>] [--list-conflicts <task-id>] [--resolve-conflict <conflict-id>]\n"
-         "       veritassync-engine --ipc-serve --db <path> --pipe <\\\\.\\pipe\\name>\n"
+         "       veritassync-engine --ipc-serve --db <path> --pipe <\\\\.\\pipe\\name> "
+         "[--identity-target <credential-manager-name>]\n"
          "       veritassync-engine --headless --mock-one-way --mock-source-root <path> "
          "--mock-target-root <path> --mock-source-db <path> --mock-target-db <path> "
          "[--mock-task-id <id>]\n";
@@ -82,7 +84,7 @@ void EnsureTask(veritassync::storage::Database& database,
     return;
   }
   if (existing->mode != expected.mode || existing->role != expected.role ||
-      std::filesystem::path(existing->root_path) != std::filesystem::path(expected.root_path)) {
+      veritassync::common::Utf8Path(existing->root_path) != veritassync::common::Utf8Path(expected.root_path)) {
     throw std::invalid_argument("existing mock task does not match requested role or root");
   }
 }
@@ -101,8 +103,8 @@ void RunMockOneWay(const std::string& task_id, const std::filesystem::path& sour
   veritassync::storage::Database target_database(target_database_path);
   source_database.ApplyMigrations();
   target_database.ApplyMigrations();
-  EnsureTask(source_database, {task_id, "one_way", "source", source_root.string()});
-  EnsureTask(target_database, {task_id, "one_way", "target", target_root.string()});
+  EnsureTask(source_database, {task_id, "one_way", "source", veritassync::common::PathUtf8(source_root)});
+  EnsureTask(target_database, {task_id, "one_way", "target", veritassync::common::PathUtf8(target_root)});
   veritassync::transport::MockNetwork network;
   auto endpoints = network.CreatePair();
   veritassync::sync::OneWaySyncNode source(
@@ -134,10 +136,11 @@ void RunMockOneWay(const std::string& task_id, const std::filesystem::path& sour
             << ", deleted files=" << target_statistics.files_deleted << "\n";
 }
 }  // namespace
-int main(int argc, char** argv) {
+int RunEngine(int argc, char** argv) {
   try {
     bool headless = false, ipc_serve = false;
     std::string db_path, pipe_name;
+    std::wstring identity_target = L"VeritasSyncNext/DeviceIdentity";
     std::string init_task_id, scan_task_id, list_conflicts_task_id, resolve_conflict_id, device_id,
         mode, role, root;
     bool mock_one_way = false;
@@ -167,6 +170,10 @@ int main(int argc, char** argv) {
         db_path = value;
       else if (argument == "--pipe")
         pipe_name = value;
+      else if (argument == "--identity-target") {
+        if (value.empty()) throw std::invalid_argument("identity target must not be empty");
+        identity_target = veritassync::common::Utf8Path(value).wstring();
+      }
       else if (argument == "--init-task")
         init_task_id = value;
       else if (argument == "--scan-task")
@@ -199,19 +206,20 @@ int main(int argc, char** argv) {
     if (ipc_serve) {
       if (db_path.empty() || pipe_name.empty())
         throw std::invalid_argument("--ipc-serve requires --db and --pipe");
-      veritassync::storage::Database database(db_path);
+      veritassync::storage::Database database(veritassync::common::Utf8Path(db_path));
       database.ApplyMigrations();
       database.RecordEngineEvent({0, std::nullopt, "info", "IPC server started",
                                   std::chrono::duration_cast<std::chrono::milliseconds>(
                                       std::chrono::system_clock::now().time_since_epoch())
                                       .count()});
-      veritassync::security::DeviceIdentityStore identity_store;
+      veritassync::security::DeviceIdentityStore identity_store(identity_target);
       veritassync::security::PairingService pairing(database, identity_store.LoadOrCreate());
       const auto bridge_path = WebRtcBridgePath();
+      const auto ice_options = veritassync::transport::IceOptions::FromEnvironment();
       veritassync::runtime::NetworkSessionManager network(
-          database, pairing, [bridge_path](const bool initiator) {
+          database, pairing, [bridge_path, ice_options](const bool initiator) {
             return std::make_unique<veritassync::transport::WebRtcTransport>(bridge_path,
-                                                                             initiator);
+                                                                             initiator, ice_options);
           });
       veritassync::runtime::TaskRuntimeManager runtime(database, pairing.Identity().DeviceId());
       runtime.SetScanCompletedCallback(
@@ -231,15 +239,15 @@ int main(int argc, char** argv) {
         throw std::invalid_argument(
             "--mock-one-way requires source/target roots and database paths");
       }
-      RunMockOneWay(mock_task_id, mock_source_root, mock_target_root, mock_source_db,
-                    mock_target_db);
+      RunMockOneWay(mock_task_id, veritassync::common::Utf8Path(mock_source_root), veritassync::common::Utf8Path(mock_target_root), veritassync::common::Utf8Path(mock_source_db),
+                    veritassync::common::Utf8Path(mock_target_db));
       return 0;
     }
     if (db_path.empty()) {
       Usage();
       return 2;
     }
-    veritassync::storage::Database database(db_path);
+    veritassync::storage::Database database(veritassync::common::Utf8Path(db_path));
     database.ApplyMigrations();
     if (!init_task_id.empty()) {
       if (mode.empty() || role.empty() || root.empty())
@@ -254,12 +262,12 @@ int main(int argc, char** argv) {
       if (!task.has_value()) throw std::invalid_argument("scan task does not exist");
       if (!veritassync::sync::CanScanLocalChanges(*task))
         throw std::invalid_argument("one-way target tasks cannot scan local changes");
-      RequireDatabaseOutsideTaskRoot(std::filesystem::path(db_path),
-                                     std::filesystem::path(task->root_path));
+      RequireDatabaseOutsideTaskRoot(veritassync::common::Utf8Path(db_path),
+                                     veritassync::common::Utf8Path(task->root_path));
       veritassync::storage::IgnoreRules rules;
-      rules.LoadFile(std::filesystem::path(task->root_path));
+      rules.LoadFile(veritassync::common::Utf8Path(task->root_path));
       veritassync::storage::ManifestScanner scanner(std::move(rules));
-      const auto snapshot = scanner.Scan(std::filesystem::path(task->root_path));
+      const auto snapshot = scanner.Scan(veritassync::common::Utf8Path(task->root_path));
       const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                            std::chrono::system_clock::now().time_since_epoch())
                            .count();
@@ -289,4 +297,14 @@ int main(int argc, char** argv) {
     std::cerr << "error: " << error.what() << "\n";
     return 1;
   }
+}
+int wmain(int argc, wchar_t** argv) {
+  std::vector<std::string> arguments;
+  for (int index = 0; index < argc; ++index) {
+    const auto text = std::filesystem::path(argv[index]).u8string();
+    arguments.emplace_back(text.begin(), text.end());
+  }
+  std::vector<char*> pointers;
+  for (auto& argument : arguments) pointers.push_back(argument.data());
+  return RunEngine(argc, pointers.data());
 }

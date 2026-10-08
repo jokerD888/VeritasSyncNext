@@ -2,6 +2,7 @@
 
 mod ai;
 mod ipc;
+mod autostart;
 
 use serde::Serialize;
 use std::{
@@ -29,6 +30,30 @@ struct EngineRuntime {
 // once. Serialize the complete probe/spawn/ready sequence so they cannot
 // create competing servers for the same named pipe.
 static ENGINE_START_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn engine_pipe_name(user: &str, identifier: &str) -> String {
+    let safe = |value: &str| -> String {
+        value.chars().map(|character| {
+            if character.is_ascii_alphanumeric() { character } else { '_' }
+        }).collect()
+    };
+    let user = safe(user);
+    // Preserve the existing production pipe, but keep differently packaged
+    // beta/test apps away from the production engine and its state database.
+    if identifier == "io.veritassync.next" {
+        format!(r"\\.\pipe\veritassync-next-{user}")
+    } else {
+        format!(r"\\.\pipe\veritassync-next-{user}-{}", safe(identifier))
+    }
+}
+
+fn engine_identity_target(identifier: &str) -> String {
+    if identifier == "io.veritassync.next" {
+        "VeritasSyncNext/DeviceIdentity".into()
+    } else {
+        format!("VeritasSyncNext/DeviceIdentity/{identifier}")
+    }
+}
 
 fn runtime(app: &AppHandle) -> Result<EngineRuntime, String> {
     let data = app
@@ -62,20 +87,10 @@ fn runtime(app: &AppHandle) -> Result<EngineRuntime, String> {
     .ok_or_else(|| {
         "找不到 veritassync-engine sidecar；请先运行 stage-desktop-engine.ps1".to_string()
     })?;
-    let user: String = std::env::var("USERNAME")
-        .unwrap_or_else(|_| "local".into())
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
+    let user = std::env::var("USERNAME").unwrap_or_else(|_| "local".into());
     Ok(EngineRuntime {
         database: data.join("state.db"),
-        pipe: format!(r"\\.\pipe\veritassync-next-{user}"),
+        pipe: engine_pipe_name(&user, &app.config().identifier),
         executable,
     })
 }
@@ -94,7 +109,9 @@ fn ensure(app: &AppHandle) -> Result<EngineRuntime, String> {
         .args(["--ipc-serve", "--db"])
         .arg(&runtime.database)
         .arg("--pipe")
-        .arg(&runtime.pipe);
+        .arg(&runtime.pipe)
+        .arg("--identity-target")
+        .arg(engine_identity_target(&app.config().identifier));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -291,6 +308,9 @@ fn main() {
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            if std::env::args().any(|argument| argument == "--background") {
+                if let Some(window) = app.get_webview_window("main") { let _ = window.hide(); }
+            }
             log::info!("VeritasSync desktop shell starting");
             let show = MenuItem::with_id(app, "show", "显示 VeritasSync", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出桌面壳", true, None::<&str>)?;
@@ -325,7 +345,9 @@ fn main() {
             clear_ai_provider_key,
             generate_ignore_rules,
             check_for_update,
-            install_update
+            install_update,
+            autostart::autostart_status,
+            autostart::configure_autostart
         ])
         .run(tauri::generate_context!())
         .expect("error while running VeritasSync desktop");
@@ -334,6 +356,18 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn isolates_nonproduction_engine_pipes_without_changing_production() {
+        assert_eq!(engine_pipe_name("joker", "io.veritassync.next"), r"\\.\pipe\veritassync-next-joker");
+        assert_ne!(engine_pipe_name("joker", "io.veritassync.next.audit"),
+                   engine_pipe_name("joker", "io.veritassync.next"));
+        assert_ne!(engine_pipe_name("joker", "io.veritassync.next.audit"),
+                   engine_pipe_name("joker", "io.veritassync.next.audit2"));
+        assert_eq!(engine_identity_target("io.veritassync.next"), "VeritasSyncNext/DeviceIdentity");
+        assert_ne!(engine_identity_target("io.veritassync.next.audit"),
+                   engine_identity_target("io.veritassync.next"));
+    }
 
     #[test]
     fn parses_ignore_context_rows_and_escaped_paths() {

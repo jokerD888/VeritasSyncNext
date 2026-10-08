@@ -20,6 +20,18 @@ export interface SyncTask {
   runtimeError: string | null;
   networkStatus: "unpaired" | "offline" | "connecting" | "online" | "error";
   networkError: string | null;
+  metrics?: TransferMetrics;
+}
+export interface TransferMetrics {
+  bytesSent: number;
+  bytesReceived: number;
+  sendBytesPerSecond: number;
+  receiveBytesPerSecond: number;
+  pendingDownloads: number;
+  bufferedBytes: number;
+  connectedPeers: number;
+  downloadTotalBytes: number;
+  downloadReceivedBytes: number;
 }
 
 export interface DeviceIdentity {
@@ -171,12 +183,20 @@ export function parseDashboard(reply: string): DashboardSnapshot {
   const tasks: SyncTask[] = [];
   const events: EngineEvent[] = [];
   const conflicts: Conflict[] = [];
+  const metrics = new Map<string, TransferMetrics>();
   for (const line of frameLines(reply).slice(1)) {
     const [kind, ...rawFields] = line.split("\t");
     if (kind === "END") break;
     const fields = rawFields.map(decodeField);
     if (kind === "TASK") {
       tasks.push(taskFromFields(fields));
+    } else if (kind === "METRICS") {
+      if ((fields.length !== 8 && fields.length !== 10) || fields.slice(1).some((value) => !/^\d+$/.test(value)))
+        throw new Error("引擎返回了无效的传输统计");
+      const [bytesSent, bytesReceived, sendBytesPerSecond, receiveBytesPerSecond,
+        pendingDownloads, bufferedBytes, connectedPeers, downloadTotalBytes = 0, downloadReceivedBytes = 0] = fields.slice(1).map(Number);
+      metrics.set(fields[0], { bytesSent, bytesReceived, sendBytesPerSecond, receiveBytesPerSecond,
+        pendingDownloads, bufferedBytes, connectedPeers, downloadTotalBytes, downloadReceivedBytes });
     } else if (kind === "EVENT") {
       const [id, taskId, level, message, timestamp] = fields;
       events.push({ id, taskId: taskId || null, level: level as EngineEvent["level"], message, timestamp: Number(timestamp) });
@@ -188,6 +208,7 @@ export function parseDashboard(reply: string): DashboardSnapshot {
     }
   }
   if (tasks.length !== status.taskCount) throw new Error("引擎返回的任务计数不一致");
+  for (const task of tasks) task.metrics = metrics.get(task.id);
   return { status, tasks, events, conflicts };
 }
 

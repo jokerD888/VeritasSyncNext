@@ -51,9 +51,11 @@ class MultiTargetSource {
   MultiTargetSource& operator=(const MultiTargetSource&) = delete;
 
   void AddTarget(MultiTargetPeerConfig config, transport::Transport& transport);
+  void RemoveTarget(const std::string& device_id);
   void Start();
   void RefreshSource();
   void Pump();
+  void SetTargetAvailable(const std::string& device_id, bool available);
 
   [[nodiscard]] std::size_t TargetCount() const;
   [[nodiscard]] std::size_t SnapshotScanCount() const;

@@ -56,12 +56,14 @@ privacy, preview, topology, and atomic-write contract.
 
 ## Packaging, signing, and updates
 
-`scripts/stage-desktop-engine.ps1` stages the C++ executable and its adjacent
-runtime DLLs as a Tauri runtime resource; the full resource directory is the
-sidecar's preferred launch location. `deploy/windows/build-release.ps1` first
-builds/tests the engine, generates an updater config only from CI environment
-secrets, stages the sidecar, invokes `cargo tauri build`, and Authenticode-signs
-and verifies the engine plus MSI/NSIS artifacts.
+`scripts/stage-desktop-engine.ps1` stages the C++ executable, its adjacent
+runtime DLLs, and the WebRTC bridge as Tauri runtime resources; the full resource
+directory is the sidecar's preferred launch location. `deploy/windows/build-release.ps1`
+first builds the bridge from the pinned checkout, configures the engine with its
+path (thereby enabling the bridge tests), then builds/tests the engine, generates
+an updater config only from CI environment secrets, stages the sidecar, invokes
+`cargo tauri build`, and Authenticode-signs and verifies the engine plus MSI/NSIS
+artifacts.
 
 The updater endpoint/public key and certificate material are deliberately not
 in source control. See [`deploy/windows/README.md`](../deploy/windows/README.md)
@@ -83,3 +85,9 @@ for the required CI secrets and publication ordering.
   forcibly terminated.
 - Trusted signing and a live updater publish additionally require the
   release-owner credentials and HTTPS endpoint.
+
+The 2026-10-09 local follow-up built the latest unsigned MSI/NSIS artifacts and
+verified the MSI includes the native bridge and all runtime DLLs. Desktop Rust
+regression has 12 passing tests and frontend regression has 16, including policy
+interaction safety. See `LOCAL_VERIFICATION.md` for the boundary: actual installation,
+logout/login startup and complete desktop visual acceptance were not performed.

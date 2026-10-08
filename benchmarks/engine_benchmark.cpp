@@ -107,7 +107,9 @@ void BenchmarkSnapshotReconcile(const std::size_t count) {
   TemporaryDirectory temporary;
   veritassync::storage::Database database(temporary.Path() / "state.db");
   database.ApplyMigrations();
-  database.CreateTask({"benchmark", "one_way", "source", temporary.Path().string()});
+  const auto sync_root = temporary.Path() / "sync";
+  std::filesystem::create_directory(sync_root);
+  database.CreateTask({"benchmark", "one_way", "source", sync_root.string()});
   const auto records = MakeRecords(count);
   database.InTransaction([&] {
     for (const auto& record : records) database.UpsertFileRecord(record);

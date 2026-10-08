@@ -6,6 +6,7 @@
 #include "engine/transport/transport.h"
 
 #include <filesystem>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -35,10 +36,12 @@ class BidirectionalSyncNode {
   void Start();
   void RefreshLocal();
   void Pump();
+  void ProposeIgnorePolicy(std::string expected_hash, std::string rules, std::string source);
   [[nodiscard]] bool HandshakeComplete() const;
   [[nodiscard]] bool IsConverged() const;
   [[nodiscard]] std::optional<std::string> LastError() const;
   [[nodiscard]] std::size_t PendingDownloadCount() const;
+  [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> DownloadProgress() const;
 
  private:
   struct SourceFile;
@@ -59,6 +62,11 @@ class BidirectionalSyncNode {
   void HandleCancel(const protocol::Cancel& cancel);
   void UpsertRemoteRecord(const protocol::VersionedManifestEntry& entry);
   void RelocateSourceFile(std::string_view old_path, std::string_view new_path);
+  void HandlePolicy(protocol::FrameType type, const protocol::IgnorePolicyMessage& policy);
+  void SendPolicyHello();
+  void RetryPolicy();
+  void ApplyCommittedPolicy(storage::PendingIgnorePolicy& policy);
+  [[nodiscard]] bool PolicyPending() const;
 
   BidirectionalSyncConfig config_;
   transport::Transport& transport_;
@@ -66,6 +74,9 @@ class BidirectionalSyncNode {
   bool started_ = false;
   bool received_hello_ = false;
   bool received_manifest_ = false;
+  bool policy_ready_ = false;
+  std::string policy_hash_;
+  std::chrono::steady_clock::time_point next_policy_retry_{};
   std::uint64_t next_request_id_ = 1;
   std::uint64_t manifest_revision_ = 0;
   std::vector<SourceFile> source_files_;

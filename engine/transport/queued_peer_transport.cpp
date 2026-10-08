@@ -12,13 +12,18 @@ QueuedPeerTransport::QueuedPeerTransport(std::unique_ptr<PeerTransport> inner)
   inner_->SetReceiveCallback(
       [this](const protocol::Channel channel, std::vector<std::uint8_t> wire) {
         std::scoped_lock lock(mutex_);
+        if (wire.size() > 32U * 1024U * 1024U - received_bytes_) { overflow_ = true; return; }
+        received_bytes_ += wire.size();
+        bytes_received_ += wire.size();
         received_.push_back({channel, std::move(wire)});
       });
 }
 
-QueuedPeerTransport::~QueuedPeerTransport() { inner_->SetReceiveCallback({}); }
+QueuedPeerTransport::~QueuedPeerTransport() { inner_->SetReceiveCallback({}); inner_.reset(); }
 void QueuedPeerTransport::Send(const protocol::Channel channel, std::vector<std::uint8_t> wire) {
+  const auto bytes = wire.size();
   inner_->Send(channel, std::move(wire));
+  bytes_sent_ += bytes;
 }
 std::size_t QueuedPeerTransport::BufferedAmount(const protocol::Channel channel) const {
   return inner_->BufferedAmount(channel);
@@ -40,6 +45,7 @@ void QueuedPeerTransport::SetRemoteDescriptionCallback(RemoteDescriptionCallback
   inner_->SetRemoteDescriptionCallback(std::move(callback));
 }
 void QueuedPeerTransport::CreateOffer() { inner_->CreateOffer(); }
+void QueuedPeerTransport::RestartIce() { inner_->RestartIce(); }
 void QueuedPeerTransport::ApplyRemoteOffer(std::string sdp) {
   inner_->ApplyRemoteOffer(std::move(sdp));
 }
@@ -52,11 +58,14 @@ void QueuedPeerTransport::ApplyRemoteIceCandidate(const IceCandidate& candidate)
 bool QueuedPeerTransport::IsReady() const { return inner_->IsReady(); }
 
 void QueuedPeerTransport::PumpReceived() {
+  inner_->Pump();
   std::deque<Received> received;
   ReceiveCallback callback;
   {
     std::scoped_lock lock(mutex_);
+    if (overflow_) throw std::runtime_error("per-peer receive budget exceeded");
     received.swap(received_);
+    received_bytes_ = 0;
     callback = callback_;
   }
   if (!callback) return;

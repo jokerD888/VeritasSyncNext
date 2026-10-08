@@ -19,6 +19,7 @@ class FakePeerTransport final : public veritassync::transport::PeerTransport {
   void CreateOffer() override {
     if (offer) offer("offer");
   }
+  void RestartIce() override { if (offer) offer("restart-offer"); }
   void ApplyRemoteOffer(std::string) override {
     if (answer) answer("answer");
   }

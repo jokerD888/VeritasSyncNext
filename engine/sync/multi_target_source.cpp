@@ -1,3 +1,4 @@
+#include "engine/common/path.h"
 #include "engine/sync/multi_target_source.h"
 
 #include "engine/common/content_hash.h"
@@ -53,6 +54,7 @@ struct MultiTargetSource::Peer {
   MultiTargetPeerConfig config;
   transport::Transport* transport = nullptr;
   bool received_hello = false;
+  bool available = true;
   std::uint64_t next_request_id = 1;
   std::vector<PendingUpload> uploads;
   std::optional<std::string> last_error;
@@ -84,8 +86,12 @@ void MultiTargetSource::AddTarget(MultiTargetPeerConfig config, transport::Trans
       [this, peer_pointer](const protocol::Channel channel, std::vector<std::uint8_t> wire) {
         Receive(*peer_pointer, channel, std::move(wire));
       });
+  const bool was_empty = peers_.empty();
   peers_.push_back(std::move(peer));
-  if (started_) SendHello(*peer_pointer);
+  if (started_) {
+    if (was_empty) RefreshSource(); // Catch edits made while every target was detached.
+    SendHello(*peer_pointer);
+  }
 }
 
 void MultiTargetSource::Start() {
@@ -95,6 +101,16 @@ void MultiTargetSource::Start() {
   started_ = true;
   RefreshSource();
   for (auto& peer : peers_) SendHello(*peer);
+}
+
+void MultiTargetSource::RemoveTarget(const std::string& device_id) {
+  std::scoped_lock lock(mutex_);
+  const auto peer = std::ranges::find_if(peers_, [&](const auto& item) {
+    return item->config.device_id == device_id;
+  });
+  if (peer == peers_.end()) return;
+  (*peer)->transport->SetReceiveCallback({});
+  peers_.erase(peer);
 }
 
 void MultiTargetSource::RefreshSource() {
@@ -119,17 +135,18 @@ void MultiTargetSource::RefreshSource() {
     source_manifest_.entries.push_back(
         {entry.relative_path, entry.size, EncodeHash(*entry.content_hash)});
     source_files_.push_back(
-        {config_.task_root / std::filesystem::path(entry.relative_path), *entry.content_hash});
+        {config_.task_root / common::Utf8Path(entry.relative_path), *entry.content_hash});
   }
   std::ranges::sort(source_files_, {}, &SourceFile::hash);
   for (auto& peer : peers_) {
-    if (peer->received_hello) SendManifest(*peer);
+    if (peer->received_hello && peer->available) SendManifest(*peer);
   }
 }
 
 void MultiTargetSource::Pump() {
   std::scoped_lock lock(mutex_);
   for (auto& peer : peers_) {
+    if (!peer->available) continue;
     for (auto upload = peer->uploads.begin(); upload != peer->uploads.end();) {
       const auto next = upload->session->NextForTransport(
           peer->transport->BufferedAmount(protocol::Channel::kBulk));
@@ -146,6 +163,13 @@ void MultiTargetSource::Pump() {
         ++upload;
     }
   }
+}
+void MultiTargetSource::SetTargetAvailable(const std::string& device_id, bool available) {
+  std::scoped_lock lock(mutex_);
+  auto* peer = FindPeer(device_id);
+  if (peer == nullptr || peer->available == available) return;
+  peer->available = available;
+  if (available && peer->received_hello) SendManifest(*peer);
 }
 
 std::size_t MultiTargetSource::TargetCount() const {

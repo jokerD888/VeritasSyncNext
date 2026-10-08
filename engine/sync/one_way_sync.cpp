@@ -1,3 +1,4 @@
+#include "engine/common/path.h"
 #include "engine/sync/one_way_sync.h"
 
 #include "engine/common/content_hash.h"
@@ -145,7 +146,7 @@ void OneWaySyncNode::RefreshSource() {
     if (!entry.content_hash.has_value()) throw std::logic_error("source file snapshot has no hash");
     source_manifest_.entries.push_back(
         {entry.relative_path, entry.size, EncodeHash(*entry.content_hash)});
-    source_files_.push_back({config_.task_root / std::filesystem::path(entry.relative_path),
+    source_files_.push_back({config_.task_root / common::Utf8Path(entry.relative_path),
                              *entry.content_hash});
   }
   std::ranges::sort(source_files_, {}, &SourceFile::hash);
@@ -188,6 +189,12 @@ bool OneWaySyncNode::TargetIsConverged() const {
 std::size_t OneWaySyncNode::PendingDownloadCount() const {
   std::scoped_lock lock(mutex_);
   return downloads_.size();
+}
+std::pair<std::uint64_t, std::uint64_t> OneWaySyncNode::DownloadProgress() const {
+  std::scoped_lock lock(mutex_);
+  std::pair<std::uint64_t, std::uint64_t> progress{};
+  for (const auto& download : downloads_) { progress.first += download.receiver->TotalBytes(); progress.second += download.receiver->ReceivedBytes(); }
+  return progress;
 }
 
 TransferStatistics OneWaySyncNode::Statistics() const {
@@ -412,7 +419,7 @@ void OneWaySyncNode::AcceptChunk(const protocol::Chunk& chunk) {
   });
   if (download == downloads_.end()) throw std::invalid_argument("chunk does not belong to an active download");
   const auto index = chunk.offset / protocol::kLogicalChunkSize;
-  download->receiver->AcceptChunk(index, chunk.offset, chunk.bytes, chunk.chunk_hash, NowMilliseconds(), false);
+  if (!download->receiver->AcceptChunk(index, chunk.offset, chunk.bytes, chunk.chunk_hash, NowMilliseconds(), false)) return;
   ++statistics_.chunks_received;
   if (std::ranges::find(download->dirty_chunks, index) == download->dirty_chunks.end()) {
     download->dirty_chunks.push_back(index);

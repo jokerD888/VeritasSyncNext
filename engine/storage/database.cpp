@@ -1,4 +1,5 @@
 #include "engine/storage/database.h"
+#include "engine/common/path.h"
 
 #include <sqlite3.h>
 
@@ -145,6 +146,14 @@ ALTER TABLE task_runtime ADD COLUMN network_error TEXT;
 UPDATE task_runtime SET network_status='offline'
 WHERE task_id IN (SELECT task_id FROM task_connections);
 )sql";
+constexpr const char* kMigration8 = R"sql(
+CREATE TABLE pending_ignore_policies (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE CASCADE,
+  proposal_id TEXT NOT NULL, origin_device_id TEXT NOT NULL, base_hash TEXT NOT NULL,
+  rules TEXT NOT NULL, source TEXT NOT NULL CHECK(source IN ('manual','ai','undo')),
+  state TEXT NOT NULL CHECK(state IN ('proposed','prepared','committed','applied'))
+);
+)sql";
 
 [[nodiscard]] const char* FileKindName(const FileKind kind) {
   switch (kind) {
@@ -222,7 +231,7 @@ void BindTransferId(sqlite3_stmt* const statement, const int index, const Transf
 }
 }  // namespace
 
-Database::Database(const std::filesystem::path& path) {
+Database::Database(const std::filesystem::path& path) : path_(path) {
   const auto utf8 = path.u8string();
   Check(
       sqlite3_open_v2(reinterpret_cast<const char*>(utf8.c_str()), &connection_,
@@ -333,10 +342,70 @@ void Database::ApplyMigrations() {
       throw;
     }
   }
+  if (SchemaVersion() < 8) {
+    InTransaction([&] {
+      Execute(kMigration8);
+      Execute("INSERT INTO schema_migrations(version, applied_at_ms) VALUES(8, unixepoch() * 1000);");
+    });
+  }
+}
+void Database::SavePendingIgnorePolicy(const PendingIgnorePolicy& policy) {
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_,
+      "INSERT INTO pending_ignore_policies VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(task_id) DO UPDATE SET "
+      "proposal_id=excluded.proposal_id, origin_device_id=excluded.origin_device_id, base_hash=excluded.base_hash, "
+      "rules=excluded.rules, source=excluded.source, state=excluded.state;", -1, &statement, nullptr), connection_, "prepare policy negotiation");
+  try {
+    const std::string* fields[] = {&policy.task_id, &policy.proposal_id, &policy.origin_device_id, &policy.base_hash, &policy.rules, &policy.source, &policy.state};
+    for (int index = 0; index < 7; ++index)
+      Check(sqlite3_bind_text(statement, index + 1, fields[index]->c_str(), -1, SQLITE_TRANSIENT), connection_, "bind policy negotiation");
+    Check(sqlite3_step(statement), connection_, "persist policy negotiation");
+    sqlite3_finalize(statement);
+  } catch (...) { sqlite3_finalize(statement); throw; }
+}
+std::optional<PendingIgnorePolicy> Database::FindPendingIgnorePolicy(const std::string& task_id) const {
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_,
+      "SELECT proposal_id,origin_device_id,base_hash,rules,source,state FROM pending_ignore_policies WHERE task_id=?;",
+      -1, &statement, nullptr), connection_, "prepare pending policy lookup");
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind pending policy lookup");
+    const auto code = sqlite3_step(statement);
+    if (code == SQLITE_DONE) { sqlite3_finalize(statement); return std::nullopt; }
+    Check(code, connection_, "read pending policy");
+    PendingIgnorePolicy policy;
+    policy.task_id = task_id;
+    std::string* fields[] = {&policy.proposal_id, &policy.origin_device_id, &policy.base_hash, &policy.rules, &policy.source, &policy.state};
+    for (int index = 0; index < 6; ++index) *fields[index] = reinterpret_cast<const char*>(sqlite3_column_text(statement, index));
+    sqlite3_finalize(statement);
+    return policy;
+  } catch (...) { sqlite3_finalize(statement); throw; }
+}
+void Database::ClearPendingIgnorePolicy(const std::string& task_id) {
+  sqlite3_stmt* statement = nullptr;
+  Check(sqlite3_prepare_v2(connection_, "DELETE FROM pending_ignore_policies WHERE task_id=?;", -1, &statement, nullptr), connection_, "prepare pending policy deletion");
+  try {
+    Check(sqlite3_bind_text(statement, 1, task_id.c_str(), -1, SQLITE_TRANSIENT), connection_, "bind pending policy deletion");
+    Check(sqlite3_step(statement), connection_, "delete pending policy");
+    sqlite3_finalize(statement);
+  } catch (...) { sqlite3_finalize(statement); throw; }
 }
 void Database::CreateTask(const TaskDefinition& task) {
   if (task.task_id.empty() || task.root_path.empty())
     throw std::invalid_argument("task id and root path are required");
+  const auto root = common::Utf8Path(task.root_path);
+  std::error_code path_error;
+  if (std::filesystem::is_directory(root, path_error)) {
+    auto parent = std::filesystem::weakly_canonical(path_, path_error);
+    if (path_error) throw std::invalid_argument("cannot resolve database path");
+    while (!parent.empty()) {
+      if (std::filesystem::equivalent(parent, root, path_error) && !path_error)
+        throw std::invalid_argument("database path must be outside the task root");
+      const auto ancestor = parent.parent_path();
+      if (ancestor == parent) break;
+      parent = ancestor;
+    }
+  }
   if ((task.mode == "one_way" && task.role != "source" && task.role != "target") ||
       (task.mode == "bidirectional" && task.role != "peer")) {
     throw std::invalid_argument("task mode and role are incompatible");
@@ -987,11 +1056,13 @@ bool Database::IsVersionAncestor(const std::string& task_id, const std::string& 
 
 std::uint64_t Database::AdvanceLogicalClock(const std::string& task_id,
                                             const std::uint64_t observed_remote_clock) {
+  std::scoped_lock lock(access_mutex_);
   if (task_id.empty() || observed_remote_clock > static_cast<std::uint64_t>(
                                                      (std::numeric_limits<sqlite3_int64>::max)())) {
     throw std::invalid_argument("logical clock arguments are invalid");
   }
-  Execute("BEGIN IMMEDIATE;");
+  const bool owns_transaction = sqlite3_get_autocommit(connection_) != 0;
+  if (owns_transaction) Execute("BEGIN IMMEDIATE;");
   try {
     std::uint64_t current = 0;
     sqlite3_stmt* select = nullptr;
@@ -1024,10 +1095,10 @@ std::uint64_t Database::AdvanceLogicalClock(const std::string& task_id,
           "bind logical clock value");
     Check(sqlite3_step(update), connection_, "update logical clock");
     sqlite3_finalize(update);
-    Execute("COMMIT;");
+    if (owns_transaction) Execute("COMMIT;");
     return next;
   } catch (...) {
-    Execute("ROLLBACK;");
+    if (owns_transaction) Execute("ROLLBACK;");
     throw;
   }
 }
@@ -1378,6 +1449,7 @@ std::vector<IgnorePolicyRevision> Database::ListIgnorePolicyRevisions(
 }
 
 void Database::InTransaction(const std::function<void()>& operation) {
+  std::scoped_lock lock(access_mutex_);
   Execute("BEGIN IMMEDIATE;");
   try {
     operation();

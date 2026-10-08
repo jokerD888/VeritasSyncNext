@@ -68,6 +68,30 @@ void InitializeTask(veritassync::storage::Database& database, const std::string&
 
 }  // namespace
 
+VSYNC_TEST(MultiTargetSourceCanDetachAndReplaceOnePeer) {
+  using namespace veritassync;
+  TemporaryMultiTargetDirectories directories;
+  storage::Database database(directories.DatabasePath("source"));
+  InitializeTask(database, "source", directories.Source());
+  transport::MockNetwork network_a, network_b, network_replacement;
+  auto a = network_a.CreatePair(), b = network_b.CreatePair(), replacement = network_replacement.CreatePair();
+  sync::MultiTargetSource source({"task-multi", "source", "source-fingerprint", directories.Source(), database});
+  source.AddTarget({"a", "fa", "auth"}, *a.first);
+  source.AddTarget({"b", "fb", "auth"}, *b.first);
+  source.Start();
+  source.RemoveTarget("a"); source.RemoveTarget("a");
+  VSYNC_CHECK(source.TargetCount() == 1);
+  VSYNC_CHECK(source.Statistics("b").has_value());
+  source.AddTarget({"a", "fa", "auth"}, *replacement.first);
+  VSYNC_CHECK(source.TargetCount() == 2);
+  source.Pump();
+  source.RemoveTarget("a"); source.RemoveTarget("b");
+  WriteBytes(directories.Source() / "offline.txt", {'n', 'e', 'w'});
+  source.AddTarget({"a", "fa", "auth"}, *replacement.first);
+  VSYNC_CHECK(source.SnapshotScanCount() == 2);
+  VSYNC_CHECK(database.FindFileRecord("task-multi", "offline.txt").has_value());
+}
+
 VSYNC_TEST(MultiTargetSourceSharesOneSnapshotAndIsolatesSlowTarget) {
   using namespace veritassync;
   TemporaryMultiTargetDirectories directories;

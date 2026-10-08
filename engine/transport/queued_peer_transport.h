@@ -3,6 +3,7 @@
 #include "engine/transport/peer_transport.h"
 
 #include <deque>
+#include <atomic>
 #include <memory>
 #include <mutex>
 
@@ -23,12 +24,15 @@ class QueuedPeerTransport final : public PeerTransport {
   void SetIceCallback(IceCallback callback) override;
   void SetRemoteDescriptionCallback(RemoteDescriptionCallback callback) override;
   void CreateOffer() override;
+  void RestartIce() override;
   void ApplyRemoteOffer(std::string sdp) override;
   void ApplyRemoteAnswer(std::string sdp) override;
   void ApplyRemoteIceCandidate(const IceCandidate& candidate) override;
   [[nodiscard]] bool IsReady() const override;
 
   void PumpReceived();
+  [[nodiscard]] std::uint64_t BytesSent() const { return bytes_sent_.load(); }
+  [[nodiscard]] std::uint64_t BytesReceived() const { return bytes_received_.load(); }
 
  private:
   struct Received {
@@ -39,6 +43,9 @@ class QueuedPeerTransport final : public PeerTransport {
   mutable std::mutex mutex_;
   std::deque<Received> received_;
   ReceiveCallback callback_;
+  std::atomic_uint64_t bytes_sent_{0}, bytes_received_{0};
+  std::size_t received_bytes_ = 0;
+  bool overflow_ = false;
 };
 
 }  // namespace veritassync::transport

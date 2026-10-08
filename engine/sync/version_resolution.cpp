@@ -1,4 +1,5 @@
 #include "engine/sync/version_resolution.h"
+#include "engine/common/path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -72,17 +73,17 @@ std::string VersionResolver::ConflictPath(const std::string& original_path,
   if (original_path.empty() || losing_record.origin_device_id.empty()) {
     throw std::invalid_argument("conflict path identity is invalid");
   }
-  const std::filesystem::path original(original_path);
+  const auto original = common::Utf8Path(original_path);
   const auto filename = original.filename();
   if (filename.empty() || filename == "." || filename == "..") {
     throw std::invalid_argument("conflict path is invalid");
   }
-  const auto stem = filename.stem().string();
-  const auto extension = filename.extension().string();
+  const auto stem = common::PathUtf8(filename.stem());
+  const auto extension = common::PathUtf8(filename.extension());
   const auto conflict_name = stem + ".conflict." + SafeDeviceId(losing_record.origin_device_id) +
                              "." + std::to_string(losing_record.logical_clock) + extension;
-  const auto result = original.parent_path() / conflict_name;
-  return result.generic_string();
+  const auto result = original.parent_path() / common::Utf8Path(conflict_name);
+  return common::PathUtf8(result);
 }
 
 }  // namespace veritassync::sync

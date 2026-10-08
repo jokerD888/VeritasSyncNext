@@ -1,11 +1,14 @@
+#include "engine/common/path.h"
 #include "engine/runtime/task_runtime_manager.h"
 
 #include "engine/common/uuid.h"
 #include "engine/storage/ignore_rules.h"
+#include "engine/storage/ignore_policy.h"
 #include "engine/storage/manifest_scanner.h"
 #include "engine/sync/task_policy.h"
 
 #include <chrono>
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -85,13 +88,14 @@ void TaskRuntimeManager::LoadTask(const std::string& task_id) {
   auto entry = std::make_unique<Entry>();
   entry->task = task;
   entry->enabled = state.enabled;
-  entry->dirty = state.dirty;
+  // A clean shutdown says nothing about edits made while the Engine was absent.
+  entry->dirty = entry->enabled && sync::CanScanLocalChanges(task);
   const auto now = std::chrono::steady_clock::now();
   entry->dirty_deadline = now + options_.debounce;
   entry->periodic_deadline = now + options_.periodic_verification;
   if (entry->enabled && sync::CanScanLocalChanges(task)) {
     entry->watcher = std::make_unique<storage::FileWatcher>(
-        task.root_path, [this, task_id] { MarkDirty(task_id); });
+        common::Utf8Path(task.root_path), [this, task_id] { MarkDirty(task_id); });
     try {
       entry->watcher->Start();
     } catch (const std::exception& error) {
@@ -205,21 +209,54 @@ sync::ReconcileResult TaskRuntimeManager::PerformScan(const std::string& task_id
     task = entries_.at(task_id)->task;
   }
   storage::IgnoreRules rules;
-  rules.LoadFile(task.root_path);
-  const auto snapshot = storage::ManifestScanner(std::move(rules)).Scan(task.root_path);
+  std::vector<storage::FileRecord> baseline;
+  std::string scanned_policy_hash;
+  if (task.mode == "bidirectional") {
+    std::scoped_lock lock(database_.AccessMutex());
+    baseline = database_.ListFileRecords(task_id);
+    scanned_policy_hash = storage::IgnorePolicy::HashRules(
+        storage::IgnorePolicy::ReadRules(common::Utf8Path(task.root_path)));
+  }
+  rules.LoadFile(common::Utf8Path(task.root_path));
+  auto snapshot = storage::ManifestScanner(std::move(rules)).Scan(common::Utf8Path(task.root_path));
+  if (task.mode == "bidirectional") {
+    // Conflict copies are preserved artifacts, not new contenders for the formal path.
+    std::erase_if(snapshot, [](const auto& entry) {
+      for (const auto& component : common::Utf8Path(entry.relative_path))
+        if (common::PathUtf8(component).find(".conflict.") != std::string::npos) return true;
+      return false;
+    });
+  }
   const auto current = NowMilliseconds();
   sync::ReconcileResult result;
+  bool policy_pending = false;
   {
     std::scoped_lock database_lock(database_.AccessMutex());
-    result = sync::SnapshotReconciler(common::NewUuidV4)
-                 .Apply(database_, snapshot, {task_id, device_id_, 0, current});
+    if (task.mode == "bidirectional") {
+      const auto pending = database_.FindPendingIgnorePolicy(task_id);
+      policy_pending = pending && pending->state != "applied";
+      const auto policy = database_.CurrentIgnorePolicyRevision(task_id);
+      const auto disk_policy_hash = storage::IgnorePolicy::HashRules(
+          storage::IgnorePolicy::ReadRules(common::Utf8Path(task.root_path)));
+      if (scanned_policy_hash != disk_policy_hash)
+        policy_pending = true; // rules changed during the walk; do not reconcile an old-policy snapshot
+      if (!policy_pending && policy && policy->content_hash != disk_policy_hash)
+        throw std::runtime_error("bidirectional ignore policy changed outside negotiated editor");
+      const auto latest = database_.ListFileRecords(task_id);
+      if (!std::ranges::equal(baseline, latest, {}, &storage::FileRecord::version_id, &storage::FileRecord::version_id))
+        policy_pending = true; // a remote commit raced the filesystem walk; discard this stale snapshot
+    }
+    if (!policy_pending) {
+      result = sync::SnapshotReconciler(common::NewUuidV4)
+                   .Apply(database_, snapshot, {task_id, device_id_, 0, current});
+    }
   }
   bool remains_dirty = false;
   {
     std::scoped_lock lock(mutex_);
     const auto entry = entries_.find(task_id);
     if (entry == entries_.end()) throw std::runtime_error("task was removed during scan");
-    remains_dirty = entry->second->generation != generation;
+    remains_dirty = policy_pending || entry->second->generation != generation;
     entry->second->dirty = remains_dirty;
     entry->second->scanning = false;
     entry->second->periodic_deadline =

@@ -1,4 +1,6 @@
+#include "engine/common/path.h"
 #include "engine/ipc/ipc_service.h"
+#include <thread>
 
 #include "engine/common/uuid.h"
 #include "engine/security/pairing_service.h"
@@ -109,17 +111,50 @@ void RequireIgnorePolicyEditor(const storage::TaskDefinition& task) {
   if (task.mode == "one_way" && task.role != "source") {
     throw std::invalid_argument("one-way target ignore policy is read-only");
   }
-  if (task.mode == "bidirectional") {
-    throw std::invalid_argument("bidirectional ignore policy requires peer negotiation");
-  }
 }
 
 }  // namespace
 
 IpcService::IpcService(storage::Database& database, security::PairingService* pairing,
                        runtime::TaskRuntimeManager* runtime,
-                       runtime::NetworkSessionManager* network)
-    : database_(database), pairing_(pairing), runtime_(runtime), network_(network) {}
+                       runtime::NetworkSessionManager* network, PeerPolicyProposer policy_proposer)
+    : database_(database), pairing_(pairing), runtime_(runtime), network_(network), policy_proposer_(std::move(policy_proposer)) {}
+
+storage::IgnorePolicyState IpcService::NegotiatePolicy(const storage::TaskDefinition& task,
+    const std::string& expected_hash, const std::string& rules, const std::string& source) {
+  storage::IgnoreRules::Validate(rules);
+  if (source != "manual" && source != "ai" && source != "undo") throw std::invalid_argument("invalid ignore policy source");
+  if (network_ == nullptr && !policy_proposer_) throw std::runtime_error("bidirectional ignore policy requires a connected peer");
+  {
+    std::scoped_lock lock(database_.AccessMutex());
+    const auto current = storage::IgnorePolicy::Synchronize(database_, task.task_id, common::Utf8Path(task.root_path), NowMilliseconds());
+    if (current.content_hash != expected_hash) throw std::invalid_argument("ignore policy changed; refresh before applying");
+    if (current.rules == rules) return current;
+    const auto pending = database_.FindPendingIgnorePolicy(task.task_id);
+    if (pending && pending->state != "applied") throw std::runtime_error("ignore policy negotiation is already pending");
+  }
+  if (policy_proposer_) policy_proposer_(task.task_id, expected_hash, rules, source);
+  else network_->ProposeIgnorePolicy(task.task_id, expected_hash, rules, source);
+  const auto desired = storage::IgnorePolicy::HashRules(rules);
+  const auto started_at = NowMilliseconds();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::scoped_lock lock(database_.AccessMutex());
+    for (const auto& event : database_.ListEngineEvents(10)) {
+      if (event.task_id == task.task_id && event.created_at_ms >= started_at &&
+          (event.message.starts_with("Ignore policy proposal failed:") || event.message == "Peer rejected ignore policy proposal"))
+        throw std::runtime_error(event.message);
+    }
+    const auto pending = database_.FindPendingIgnorePolicy(task.task_id);
+    if (pending && pending->rules == rules && pending->state == "applied")
+      return storage::IgnorePolicy::Synchronize(database_, task.task_id, common::Utf8Path(task.root_path), NowMilliseconds());
+    const auto current = database_.CurrentIgnorePolicyRevision(task.task_id);
+    if (current && current->content_hash == desired && (!pending || pending->state == "applied"))
+      return {current->revision, current->content, current->content_hash, current->source, current->created_at_ms};
+  }
+  throw std::runtime_error("peer has not confirmed ignore policy; pending negotiation will resume on reconnect");
+}
 
 std::string IpcService::Handle(const std::string_view request, bool* const should_shutdown) {
   if (should_shutdown != nullptr) *should_shutdown = false;
@@ -154,6 +189,14 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
             (runtime.last_scan_at_ms.has_value() ? std::to_string(*runtime.last_scan_at_ms) : "") +
             "\t" + Escape(runtime.last_error.value_or("")) + "\t" + Escape(runtime.network_status) +
             "\t" + Escape(runtime.network_error.value_or("")) + "\n";
+        if (network_ != nullptr) {
+          const auto metrics = network_->Metrics(task.task_id);
+          response += "METRICS\t" + Escape(task.task_id) + "\t" + std::to_string(metrics.bytes_sent) +
+              "\t" + std::to_string(metrics.bytes_received) + "\t" + std::to_string(metrics.send_bytes_per_second) +
+              "\t" + std::to_string(metrics.receive_bytes_per_second) + "\t" + std::to_string(metrics.pending_downloads) +
+              "\t" + std::to_string(metrics.buffered_bytes) + "\t" + std::to_string(metrics.connected_peers) +
+              "\t" + std::to_string(metrics.download_total_bytes) + "\t" + std::to_string(metrics.download_received_bytes) + "\n";
+        }
       }
       for (const auto& event : events) {
         response += "EVENT\t" + std::to_string(event.event_id) + "\t" +
@@ -194,9 +237,12 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
     if (command == "create_invitation") {
       RequireCount(fields, 4);
       if (pairing_ == nullptr) throw std::runtime_error("pairing service is unavailable");
+      const bool already_paired = database_.FindTaskConnection(fields[2]).has_value();
       database_lock.unlock();
       const auto invitation = pairing_->CreateInvitation(fields[2], fields[3]);
-      if (network_ != nullptr) network_->TaskChanged(fields[2]);
+      // Another invitation does not change an existing room or require dropping
+      // its established peers. Membership refresh adds the new target in place.
+      if (network_ != nullptr && !already_paired) network_->TaskChanged(fields[2]);
       database_lock.lock();
       Record(database_, fields[2], "Created pairing invitation");
       return "OK\t" + Escape(invitation.token) + "\t" + Escape(invitation.code) + "\t" +
@@ -260,8 +306,8 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
       if (!sync::CanScanLocalChanges(*task))
         throw std::invalid_argument("target task cannot scan local changes");
       storage::IgnoreRules rules;
-      rules.LoadFile(task->root_path);
-      const auto snapshot = storage::ManifestScanner(std::move(rules)).Scan(task->root_path);
+      rules.LoadFile(common::Utf8Path(task->root_path));
+      const auto snapshot = storage::ManifestScanner(std::move(rules)).Scan(common::Utf8Path(task->root_path));
       const auto result =
           sync::SnapshotReconciler(common::NewUuidV4)
               .Apply(database_, snapshot, {fields[2], fields[3], 0, NowMilliseconds()});
@@ -273,7 +319,7 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
       RequireCount(fields, 3);
       const auto task = RequireTask(database_, fields[2]);
       const auto policy = storage::IgnorePolicy::Synchronize(database_, task.task_id,
-                                                             task.root_path, NowMilliseconds());
+                                                             common::Utf8Path(task.root_path), NowMilliseconds());
       const bool can_undo = database_.ListIgnorePolicyRevisions(task.task_id, 2).size() > 1U;
       return "OK\t" + std::to_string(policy.revision) + "\t" + Escape(policy.content_hash) + "\t" +
              (can_undo ? "1" : "0") + "\t" + Escape(policy.rules) + "\n";
@@ -285,7 +331,7 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
                         : fields[4] == "precise"
                             ? storage::IgnoreContextMode::kPrecise
                             : throw std::invalid_argument("ignore context mode is invalid");
-      const auto context = storage::IgnorePolicy::BuildContext(task.root_path, fields[3], mode);
+      const auto context = storage::IgnorePolicy::BuildContext(common::Utf8Path(task.root_path), fields[3], mode);
       std::string response = "OK\t" + std::to_string(context.scanned_files) + "\t" +
                              (context.truncated ? "1" : "0") + "\t" +
                              Escape(context.directory_summary) + "\n";
@@ -298,13 +344,13 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
       RequireCount(fields, 4);
       const auto task = RequireTask(database_, fields[2]);
       const auto current = storage::IgnorePolicy::Synchronize(database_, task.task_id,
-                                                              task.root_path, NowMilliseconds());
+                                                              common::Utf8Path(task.root_path), NowMilliseconds());
       std::vector<std::string> tracked_paths;
       for (const auto& record : database_.ListFileRecords(task.task_id)) {
         if (record.kind == storage::FileKind::kFile) tracked_paths.push_back(record.relative_path);
       }
       const auto preview =
-          storage::IgnorePolicy::Preview(task.root_path, current.rules, fields[3], tracked_paths);
+          storage::IgnorePolicy::Preview(common::Utf8Path(task.root_path), current.rules, fields[3], tracked_paths);
       std::string response =
           "OK\t" + Escape(current.content_hash) + "\t" + std::to_string(preview.scanned_files) +
           "\t" + std::to_string(preview.currently_ignored) + "\t" +
@@ -324,9 +370,14 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
       RequireCount(fields, 6);
       const auto task = RequireTask(database_, fields[2]);
       RequireIgnorePolicyEditor(task);
-      const auto policy =
-          storage::IgnorePolicy::Apply(database_, task.task_id, task.root_path, fields[3],
-                                       fields[4], fields[5], NowMilliseconds());
+      storage::IgnorePolicyState policy;
+      if (task.mode == "bidirectional") {
+        database_lock.unlock();
+        policy = NegotiatePolicy(task, fields[3], fields[4], fields[5]);
+        database_lock.lock();
+      } else {
+        policy = storage::IgnorePolicy::Apply(database_, task.task_id, common::Utf8Path(task.root_path), fields[3], fields[4], fields[5], NowMilliseconds());
+      }
       Record(database_, task.task_id,
              "Applied ignore policy revision " + std::to_string(policy.revision));
       return "OK\t" + std::to_string(policy.revision) + "\t" + Escape(policy.content_hash) + "\n";
@@ -335,8 +386,17 @@ std::string IpcService::Handle(const std::string_view request, bool* const shoul
       RequireCount(fields, 4);
       const auto task = RequireTask(database_, fields[2]);
       RequireIgnorePolicyEditor(task);
-      const auto policy = storage::IgnorePolicy::Undo(database_, task.task_id, task.root_path,
-                                                      fields[3], NowMilliseconds());
+      storage::IgnorePolicyState policy;
+      if (task.mode == "bidirectional") {
+        const auto history = database_.ListIgnorePolicyRevisions(task.task_id, 2);
+        if (history.size() < 2) throw std::invalid_argument("ignore policy has no previous revision");
+        const auto rules = history[1].content;
+        database_lock.unlock();
+        policy = NegotiatePolicy(task, fields[3], rules, "undo");
+        database_lock.lock();
+      } else {
+        policy = storage::IgnorePolicy::Undo(database_, task.task_id, common::Utf8Path(task.root_path), fields[3], NowMilliseconds());
+      }
       Record(database_, task.task_id,
              "Restored ignore policy revision " + std::to_string(policy.revision));
       return "OK\t" + std::to_string(policy.revision) + "\t" + Escape(policy.content_hash) + "\t" +

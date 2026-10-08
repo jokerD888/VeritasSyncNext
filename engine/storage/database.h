@@ -111,6 +111,9 @@ struct IgnorePolicyRevision {
   std::string source;
   std::int64_t created_at_ms = 0;
 };
+struct PendingIgnorePolicy {
+  std::string task_id, proposal_id, origin_device_id, base_hash, rules, source, state;
+};
 
 class Database {
  public:
@@ -169,6 +172,9 @@ class Database {
       const std::string& task_id) const;
   [[nodiscard]] std::vector<IgnorePolicyRevision> ListIgnorePolicyRevisions(
       const std::string& task_id, std::size_t limit = 50) const;
+  void SavePendingIgnorePolicy(const PendingIgnorePolicy& policy);
+  [[nodiscard]] std::optional<PendingIgnorePolicy> FindPendingIgnorePolicy(const std::string& task_id) const;
+  void ClearPendingIgnorePolicy(const std::string& task_id);
   void InTransaction(const std::function<void()>& operation);
   void CreateTransfer(const TransferRecord& transfer);
   void MarkTransferChunkCompleted(const TransferId& transfer_id, std::uint64_t chunk_index,
@@ -197,6 +203,7 @@ class Database {
   sqlite3* connection_ = nullptr;
   sqlite3_stmt* upsert_file_record_ = nullptr;
   mutable std::recursive_mutex access_mutex_;
+  std::filesystem::path path_;
 };
 
 }  // namespace veritassync::storage

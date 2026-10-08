@@ -13,7 +13,7 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
     veritassync::storage::Database database(path);
     database.ApplyMigrations();
     database.ApplyMigrations();
-    VSYNC_CHECK(database.SchemaVersion() == 7);
+    VSYNC_CHECK(database.SchemaVersion() == 8);
     database.CreateTask({"task-1", "one_way", "source", "C:/sync"});
     const auto task = database.FindTask("task-1");
     VSYNC_CHECK(task.has_value());
@@ -28,6 +28,16 @@ VSYNC_TEST(DatabaseMigrationsAreReplaySafeAndPersistTasks) {
   std::filesystem::remove(path);
   std::filesystem::remove(path.string() + "-shm");
   std::filesystem::remove(path.string() + "-wal");
+}
+VSYNC_TEST(DatabaseRejectsSyncRootsContainingItsOwnStateAndWal) {
+  const auto root = std::filesystem::temp_directory_path() / ("veritassync-db-root-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directory(root);
+  {
+    veritassync::storage::Database database(root / "state.db"); database.ApplyMigrations();
+    VSYNC_CHECK_THROWS(database.CreateTask({"unsafe", "one_way", "source", root.string()}));
+  }
+  std::filesystem::remove_all(root);
 }
 
 VSYNC_TEST(DatabasePersistsTaskRuntimeConnectionAndAuthorizedMembers) {

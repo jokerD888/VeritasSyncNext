@@ -3,10 +3,9 @@ cmake_minimum_required(VERSION 3.25)
 project(VeritasSyncNext VERSION 0.1.0 LANGUAGES CXX)
 
 option(VERITASSYNC_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
-option(VERITASSYNC_ENABLE_WEBRTC "Verify the pinned libwebrtc build required by the adapter" OFF)
+option(VERITASSYNC_ENABLE_WEBRTC "Require and verify the pinned WebRTC bridge used by real peer sessions" OFF)
 option(VERITASSYNC_BUILD_BENCHMARKS "Build deterministic local performance benchmarks" ON)
 set(VERITASSYNC_WEBRTC_ROOT "" CACHE PATH "Pinned libwebrtc source checkout")
-set(VERITASSYNC_WEBRTC_LIBRARY "" CACHE FILEPATH "libwebrtc static library built from the pinned checkout")
 set(VERITASSYNC_WEBRTC_BRIDGE_LIBRARY "" CACHE FILEPATH "C ABI bridge DLL built from the pinned libwebrtc checkout")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -19,7 +18,7 @@ find_package(unofficial-sodium CONFIG REQUIRED)
 
 function(veritassync_apply_warnings target)
   if(MSVC)
-    target_compile_options(${target} PRIVATE /W4 /permissive-)
+    target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
     if(VERITASSYNC_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE /WX)
     endif()
@@ -53,6 +52,8 @@ add_library(veritassync_engine
   engine/transport/send_scheduler.cpp
   engine/transport/webrtc_bridge_loader.cpp
   engine/transport/webrtc_transport.cpp
+  engine/transport/ice_options.cpp
+  engine/transport/frame_fragments.cpp
   engine/signaling/tracker_contract.cpp
   engine/signaling/tracker_client.cpp
   engine/signaling/signaling_session.cpp
@@ -89,10 +90,7 @@ if(VERITASSYNC_ENABLE_WEBRTC)
   if(NOT EXISTS "${VERITASSYNC_WEBRTC_ROOT}/.git")
     message(FATAL_ERROR "VERITASSYNC_WEBRTC_ROOT must be a libwebrtc checkout pinned by third_party/libwebrtc.lock")
   endif()
-  if(NOT EXISTS "${VERITASSYNC_WEBRTC_LIBRARY}")
-    message(FATAL_ERROR "VERITASSYNC_WEBRTC_LIBRARY must name the libwebrtc artifact from the pinned checkout")
-  endif()
-  if(NOT VERITASSYNC_WEBRTC_BRIDGE_LIBRARY STREQUAL "" AND
+  if(VERITASSYNC_WEBRTC_BRIDGE_LIBRARY STREQUAL "" OR
      NOT EXISTS "${VERITASSYNC_WEBRTC_BRIDGE_LIBRARY}")
     message(FATAL_ERROR "VERITASSYNC_WEBRTC_BRIDGE_LIBRARY must name the bridge DLL built by scripts/build-webrtc-bridge.ps1")
   endif()
@@ -110,7 +108,7 @@ if(VERITASSYNC_ENABLE_WEBRTC)
     message(FATAL_ERROR "VERITASSYNC_WEBRTC_ROOT is not at the commit pinned by third_party/libwebrtc.lock")
   endif()
   add_custom_target(veritassync_webrtc_artifact
-    COMMENT "Verified pinned libwebrtc ${veritassync_webrtc_commit}: ${VERITASSYNC_WEBRTC_LIBRARY}"
+    COMMENT "Verified pinned libwebrtc ${veritassync_webrtc_commit}: ${VERITASSYNC_WEBRTC_BRIDGE_LIBRARY}"
   )
   add_dependencies(veritassync_engine veritassync_webrtc_artifact)
 endif()
@@ -121,6 +119,9 @@ veritassync_apply_warnings(veritassync-engine)
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(veritassync-local-peer tests/local_peer.cpp)
+  target_link_libraries(veritassync-local-peer PRIVATE veritassync_engine ws2_32)
+  veritassync_apply_warnings(veritassync-local-peer)
   add_executable(veritassync_tests
     tests/test_main.cpp
     tests/protocol_test.cpp
@@ -154,6 +155,8 @@ if(BUILD_TESTING)
     tests/send_scheduler_test.cpp
     tests/tracker_contract_test.cpp
     tests/tracker_client_test.cpp
+    tests/signaling_session_test.cpp
+    tests/frame_fragments_test.cpp
   )
   if(VERITASSYNC_ENABLE_WEBRTC AND NOT VERITASSYNC_WEBRTC_BRIDGE_LIBRARY STREQUAL "")
     target_sources(veritassync_tests PRIVATE tests/webrtc_bridge_loader_test.cpp)

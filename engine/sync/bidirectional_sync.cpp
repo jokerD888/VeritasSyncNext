@@ -1,8 +1,10 @@
+#include "engine/common/path.h"
 #include "engine/sync/bidirectional_sync.h"
 
 #include "engine/common/content_hash.h"
 #include "engine/common/uuid.h"
 #include "engine/storage/ignore_rules.h"
+#include "engine/storage/ignore_policy.h"
 #include "engine/storage/manifest_scanner.h"
 #include "engine/sync/download_receiver.h"
 #include "engine/sync/upload_session.h"
@@ -56,8 +58,8 @@ constexpr std::size_t kPersistBatchBytes = 8U * 1024U * 1024U;
   return size == 0 ? 0 : (size + protocol::kLogicalChunkSize - 1U) / protocol::kLogicalChunkSize;
 }
 [[nodiscard]] bool IsConflictPath(const std::string_view path) {
-  for (const auto& component : std::filesystem::path(path)) {
-    if (component.string().find(".conflict.") != std::string::npos) return true;
+  for (const auto& component : common::Utf8Path(path)) {
+    if (common::PathUtf8(component).find(".conflict.") != std::string::npos) return true;
   }
   return false;
 }
@@ -132,6 +134,7 @@ void BidirectionalSyncNode::Start() {
   std::scoped_lock lock(mutex_);
   if (started_) return;
   started_ = true;
+  policy_hash_ = storage::IgnorePolicy::Synchronize(config_.database, config_.task_id, config_.task_root, NowMilliseconds()).content_hash;
   RefreshLocal();
   Send(protocol::Channel::kControl, protocol::FrameType::kHello,
        protocol::EncodeHello({config_.task_id, protocol::Role::kPeer, config_.device_id,
@@ -140,6 +143,12 @@ void BidirectionalSyncNode::Start() {
 
 void BidirectionalSyncNode::RefreshLocal() {
   std::scoped_lock lock(mutex_);
+  if (PolicyPending()) return;
+  const auto current_hash = storage::IgnorePolicy::HashRules(storage::IgnorePolicy::ReadRules(config_.task_root));
+  if (received_hello_ && current_hash != policy_hash_) {
+    policy_ready_ = false;
+    throw std::runtime_error("ignore policy changed outside negotiated editor");
+  }
   storage::IgnoreRules rules;
   rules.LoadFile(config_.task_root);
   auto snapshot = storage::ManifestScanner(std::move(rules)).Scan(config_.task_root);
@@ -184,7 +193,7 @@ void BidirectionalSyncNode::RefreshLocal() {
   source_files_.clear();
   for (const auto& entry : snapshot) {
     if (entry.kind == storage::SnapshotKind::kFile && entry.content_hash.has_value()) {
-      source_files_.push_back({config_.task_root / std::filesystem::path(entry.relative_path), *entry.content_hash});
+      source_files_.push_back({config_.task_root / common::Utf8Path(entry.relative_path), *entry.content_hash});
     }
   }
   std::ranges::sort(source_files_, {}, &SourceFile::hash);
@@ -193,6 +202,8 @@ void BidirectionalSyncNode::RefreshLocal() {
 
 void BidirectionalSyncNode::Pump() {
   std::scoped_lock lock(mutex_);
+  if (received_hello_) RetryPolicy();
+  if (PolicyPending() || !policy_ready_) return;
   for (auto upload = uploads_.begin(); upload != uploads_.end();) {
     const auto next = upload->session->NextForTransport(transport_.BufferedAmount(protocol::Channel::kBulk));
     if (next.has_value()) transport_.Send(next->channel, std::move(next->wire));
@@ -207,9 +218,15 @@ void BidirectionalSyncNode::Pump() {
 }
 
 bool BidirectionalSyncNode::HandshakeComplete() const { std::scoped_lock lock(mutex_); return started_ && received_hello_ && !last_error_.has_value(); }
-bool BidirectionalSyncNode::IsConverged() const { std::scoped_lock lock(mutex_); return HandshakeComplete() && received_manifest_ && downloads_.empty(); }
+bool BidirectionalSyncNode::IsConverged() const { std::scoped_lock lock(mutex_); return HandshakeComplete() && policy_ready_ && !PolicyPending() && received_manifest_ && downloads_.empty(); }
 std::optional<std::string> BidirectionalSyncNode::LastError() const { std::scoped_lock lock(mutex_); return last_error_; }
 std::size_t BidirectionalSyncNode::PendingDownloadCount() const { std::scoped_lock lock(mutex_); return downloads_.size(); }
+std::pair<std::uint64_t, std::uint64_t> BidirectionalSyncNode::DownloadProgress() const {
+  std::scoped_lock lock(mutex_);
+  std::pair<std::uint64_t, std::uint64_t> progress{};
+  for (const auto& download : downloads_) { progress.first += download.receiver->TotalBytes(); progress.second += download.receiver->ReceivedBytes(); }
+  return progress;
+}
 
 void BidirectionalSyncNode::Receive(const protocol::Channel channel, std::vector<std::uint8_t> wire) {
   std::scoped_lock lock(mutex_);
@@ -227,11 +244,16 @@ void BidirectionalSyncNode::Receive(const protocol::Channel channel, std::vector
         Send(protocol::Channel::kControl, protocol::FrameType::kHello,
              protocol::EncodeHello({config_.task_id, protocol::Role::kPeer, config_.device_id,
                                     config_.device_fingerprint, config_.authorization_digest}));
-        SendManifest();
+        SendPolicyHello();
       }
       return;
     }
     if (!started_ || !received_hello_) throw std::invalid_argument("unauthorized_peer");
+    if (frame.type >= protocol::FrameType::kPolicyHello && frame.type <= protocol::FrameType::kPolicyReject) {
+      HandlePolicy(frame.type, protocol::DecodeIgnorePolicy(frame.payload));
+      return;
+    }
+    if (!policy_ready_ || PolicyPending()) return;
     switch (frame.type) {
       case protocol::FrameType::kVersionManifest: ApplyManifest(protocol::DecodeVersionedManifest(frame.payload)); break;
       case protocol::FrameType::kFileRequest: HandleFileRequest(protocol::DecodeFileRequest(frame.payload)); break;
@@ -248,6 +270,7 @@ void BidirectionalSyncNode::Send(const protocol::Channel channel, const protocol
 }
 
 void BidirectionalSyncNode::SendManifest() {
+  if (!policy_ready_ || PolicyPending()) return;
   protocol::VersionedManifest manifest{++manifest_revision_, {}};
   const auto records = config_.database.ListFileRecords(config_.task_id);
   const auto lineage_rows = config_.database.ListVersionLineage(config_.task_id);
@@ -257,7 +280,10 @@ void BidirectionalSyncNode::SendManifest() {
     lineage_by_version.emplace(lineage.version_id, &lineage);
   }
   manifest.entries.reserve(records.size());
+  storage::IgnoreRules rules;
+  rules.LoadFile(config_.task_root);
   for (const auto& record : records) {
+    if (rules.IsIgnored(record.relative_path)) continue;
     const auto lineage = lineage_by_version.find(record.version_id);
     if (lineage == lineage_by_version.end()) throw std::runtime_error("local record has no version lineage");
     manifest.entries.push_back({record.relative_path, ToProtocolKind(record.kind), record.size,
@@ -268,6 +294,137 @@ void BidirectionalSyncNode::SendManifest() {
   }
   Send(protocol::Channel::kControl, protocol::FrameType::kVersionManifest,
        protocol::EncodeVersionedManifest(manifest));
+}
+
+bool BidirectionalSyncNode::PolicyPending() const {
+  const auto pending = config_.database.FindPendingIgnorePolicy(config_.task_id);
+  return pending && pending->state != "applied";
+}
+void BidirectionalSyncNode::SendPolicyHello() {
+  const auto pending = config_.database.FindPendingIgnorePolicy(config_.task_id);
+  const auto hash = storage::IgnorePolicy::HashRules(storage::IgnorePolicy::ReadRules(config_.task_root));
+  Send(protocol::Channel::kControl, protocol::FrameType::kPolicyHello,
+       protocol::EncodeIgnorePolicy({pending ? pending->proposal_id : "", hash, "", "manual"}));
+}
+void BidirectionalSyncNode::ProposeIgnorePolicy(std::string expected_hash, std::string rules, std::string source) {
+  std::scoped_lock lock(mutex_);
+  storage::IgnoreRules::Validate(rules);
+  if (!policy_ready_ || !HandshakeComplete() || !uploads_.empty() || !downloads_.empty())
+    throw std::runtime_error("ignore policy negotiation requires an idle connected peer");
+  if (PolicyPending()) throw std::runtime_error("ignore policy negotiation is already pending");
+  if (source != "manual" && source != "ai" && source != "undo") throw std::invalid_argument("invalid ignore policy source");
+  if (storage::IgnorePolicy::HashRules(storage::IgnorePolicy::ReadRules(config_.task_root)) != expected_hash)
+    throw std::invalid_argument("ignore policy changed; refresh before applying");
+  config_.database.SavePendingIgnorePolicy({config_.task_id, common::NewUuidV4(), config_.device_id,
+      std::move(expected_hash), std::move(rules), std::move(source), "proposed"});
+  next_policy_retry_ = {};
+  RetryPolicy();
+}
+void BidirectionalSyncNode::RetryPolicy() {
+  const auto now = std::chrono::steady_clock::now();
+  if (now < next_policy_retry_) return;
+  const auto pending = config_.database.FindPendingIgnorePolicy(config_.task_id);
+  if (!pending || pending->state == "applied" || pending->origin_device_id != config_.device_id) return;
+  if (pending->state == "committed") {
+    auto recover = *pending;
+    ApplyCommittedPolicy(recover);
+  }
+  Send(protocol::Channel::kControl,
+       pending->state == "committed" ? protocol::FrameType::kPolicyCommit : protocol::FrameType::kPolicyPropose,
+       protocol::EncodeIgnorePolicy({pending->proposal_id, pending->base_hash, pending->rules, pending->source}));
+  next_policy_retry_ = now + std::chrono::milliseconds(500);
+}
+void BidirectionalSyncNode::ApplyCommittedPolicy(storage::PendingIgnorePolicy& policy) {
+  const auto current_hash = storage::IgnorePolicy::HashRules(storage::IgnorePolicy::ReadRules(config_.task_root));
+  const auto desired_hash = storage::IgnorePolicy::HashRules(policy.rules);
+  if (current_hash != desired_hash) {
+    (void)storage::IgnorePolicy::Apply(config_.database, config_.task_id, config_.task_root,
+                                    policy.base_hash, policy.rules, policy.source, NowMilliseconds());
+  } else {
+    // A crash after atomic file replacement but before recording the revision.
+    (void)storage::IgnorePolicy::Synchronize(config_.database, config_.task_id, config_.task_root, NowMilliseconds());
+  }
+  policy_hash_ = desired_hash;
+}
+void BidirectionalSyncNode::HandlePolicy(protocol::FrameType type, const protocol::IgnorePolicyMessage& message) {
+  using protocol::FrameType;
+  auto pending = config_.database.FindPendingIgnorePolicy(config_.task_id);
+  const auto reply = [&](FrameType kind) {
+    Send(protocol::Channel::kControl, kind, protocol::EncodeIgnorePolicy(message));
+  };
+  if (type == FrameType::kPolicyHello) {
+    const auto hash = storage::IgnorePolicy::HashRules(storage::IgnorePolicy::ReadRules(config_.task_root));
+    if (hash != message.base_hash && (!pending || pending->proposal_id != message.proposal_id))
+      throw std::runtime_error("peer ignore policies differ; restore matching rules before synchronization");
+    policy_hash_ = hash;
+    policy_ready_ = hash == message.base_hash;
+    next_policy_retry_ = {};
+    RetryPolicy();
+    SendManifest();
+    return;
+  }
+  if (message.proposal_id.empty()) throw std::invalid_argument("policy proposal id is required");
+  storage::IgnoreRules::Validate(message.rules);
+  const bool matching = pending && pending->proposal_id == message.proposal_id &&
+      pending->base_hash == message.base_hash && pending->rules == message.rules && pending->source == message.source;
+  if (type == FrameType::kPolicyPropose) {
+    if (matching) {
+      if (pending->origin_device_id != config_.peer_device_id) throw std::invalid_argument("policy proposer mismatch");
+      reply(pending->state == "applied" ? FrameType::kPolicyDone : FrameType::kPolicyAck);
+      return;
+    }
+    if (PolicyPending() || !uploads_.empty() || !downloads_.empty() ||
+        storage::IgnorePolicy::HashRules(storage::IgnorePolicy::ReadRules(config_.task_root)) != message.base_hash) {
+      reply(FrameType::kPolicyReject);
+      return;
+    }
+    if (message.source != "manual" && message.source != "ai" && message.source != "undo")
+      throw std::invalid_argument("invalid policy source");
+    config_.database.SavePendingIgnorePolicy({config_.task_id, message.proposal_id, config_.peer_device_id,
+        message.base_hash, message.rules, message.source, "prepared"});
+    reply(FrameType::kPolicyAck);
+    return;
+  }
+  if (!matching) {
+    if (type == FrameType::kPolicyReject) return;
+    throw std::invalid_argument("policy acknowledgement does not match durable proposal");
+  }
+  if (type == FrameType::kPolicyReject) {
+    if (pending->origin_device_id == config_.device_id && pending->state == "proposed") {
+      config_.database.ClearPendingIgnorePolicy(config_.task_id);
+      config_.database.RecordEngineEvent({0, config_.task_id, "warning", "Peer rejected ignore policy proposal", NowMilliseconds()});
+    }
+    return;
+  }
+  if (type == FrameType::kPolicyAck) {
+    if (pending->origin_device_id != config_.device_id || pending->state == "applied") return;
+    pending->state = "committed";
+    config_.database.SavePendingIgnorePolicy(*pending); // decision survives restart before either file changes
+    ApplyCommittedPolicy(*pending);
+    reply(FrameType::kPolicyCommit);
+    return;
+  }
+  if (type == FrameType::kPolicyCommit) {
+    if (pending->origin_device_id != config_.peer_device_id) throw std::invalid_argument("policy commit origin mismatch");
+    if (pending->state != "applied") {
+      pending->state = "committed";
+      config_.database.SavePendingIgnorePolicy(*pending);
+      ApplyCommittedPolicy(*pending);
+      pending->state = "applied";
+      config_.database.SavePendingIgnorePolicy(*pending);
+    }
+    reply(FrameType::kPolicyDone);
+  } else if (type == FrameType::kPolicyDone) {
+    if (pending->origin_device_id != config_.device_id) throw std::invalid_argument("policy receipt origin mismatch");
+    if (pending->state != "applied") {
+      ApplyCommittedPolicy(*pending);
+      pending->state = "applied";
+      config_.database.SavePendingIgnorePolicy(*pending);
+    }
+  }
+  policy_ready_ = true;
+  policy_hash_ = storage::IgnorePolicy::HashRules(storage::IgnorePolicy::ReadRules(config_.task_root));
+  RefreshLocal();
 }
 
 void BidirectionalSyncNode::ApplyManifest(const protocol::VersionedManifest& manifest) {
@@ -281,7 +438,11 @@ void BidirectionalSyncNode::ApplyManifest(const protocol::VersionedManifest& man
   std::ranges::sort(paths);
   if (std::adjacent_find(paths.begin(), paths.end()) != paths.end()) throw std::invalid_argument("manifest contains duplicate paths");
   received_manifest_ = true;
-  for (const auto& entry : manifest.entries) ApplyRemoteEntry(entry);
+  storage::IgnoreRules rules;
+  rules.LoadFile(config_.task_root);
+  for (const auto& entry : manifest.entries) {
+    if (!rules.IsIgnored(entry.relative_path)) ApplyRemoteEntry(entry);
+  }
 }
 
 void BidirectionalSyncNode::ApplyRemoteEntry(const protocol::VersionedManifestEntry& entry) {
@@ -367,7 +528,7 @@ void BidirectionalSyncNode::AcceptChunk(const protocol::Chunk& chunk) {
   });
   if (download == downloads_.end()) throw std::invalid_argument("chunk does not belong to active download");
   const auto index = chunk.offset / protocol::kLogicalChunkSize;
-  download->receiver->AcceptChunk(index, chunk.offset, chunk.bytes, chunk.chunk_hash, NowMilliseconds(), false);
+  if (!download->receiver->AcceptChunk(index, chunk.offset, chunk.bytes, chunk.chunk_hash, NowMilliseconds(), false)) return;
   if (std::ranges::find(download->dirty_chunks, index) == download->dirty_chunks.end()) {
     download->dirty_chunks.push_back(index); download->dirty_bytes += chunk.bytes.size();
   }
@@ -418,9 +579,9 @@ void BidirectionalSyncNode::UpsertRemoteRecord(const protocol::VersionedManifest
 }
 
 void BidirectionalSyncNode::RelocateSourceFile(const std::string_view old_path, const std::string_view new_path) {
-  const auto old_absolute = config_.task_root / std::filesystem::path(old_path);
+  const auto old_absolute = config_.task_root / common::Utf8Path(old_path);
   for (auto& source : source_files_) {
-    if (source.absolute_path == old_absolute) source.absolute_path = config_.task_root / std::filesystem::path(new_path);
+    if (source.absolute_path == old_absolute) source.absolute_path = config_.task_root / common::Utf8Path(new_path);
   }
 }
 

@@ -10,7 +10,8 @@ interface IgnoreRulesDialogProps {
   task: SyncTask;
 }
 
-const editableTask = (task: SyncTask) => task.mode === "one_way" && task.role === "source";
+const editableTask = (task: SyncTask) => task.role === "source" ||
+  (task.mode === "bidirectional" && task.enabled && task.networkStatus === "online");
 
 function countRules(rules: string) {
   return rules.split(/\r?\n/).filter((line) => line.trim() && !line.trim().startsWith("#")).length;
@@ -141,12 +142,13 @@ export function IgnoreRulesDialog({ task }: IgnoreRulesDialogProps) {
           <Dialog.Close className="icon-close" aria-label="关闭"><X className="size-4" /></Dialog.Close>
         </header>
 
-        {!editable && <div className="ignore-readonly"><ShieldCheck className="size-5" /><div><strong>此任务只读</strong><p>{task.role === "target" ? "单向 Target 必须沿用 Source 的忽略策略。" : "双向任务需先实现两节点规则协商，当前不会允许本机单独改动。"}</p></div></div>}
+        {!editable && <div className="ignore-readonly"><ShieldCheck className="size-5" /><div><strong>此任务只读</strong><p>{task.role === "target" ? "单向 Target 必须沿用 Source 的忽略策略。" : "双向规则需要另一设备在线并确认；请先连接和恢复任务。"}</p></div></div>}
+        {editable && task.mode === "bidirectional" && <p className="ignore-readonly">保存和撤销都会协商两台设备的规则；协商期间暂停文件变更同步。</p>}
 
         <div className="ignore-workspace">
           <section className="ignore-editor-pane">
             <div className="pane-heading"><div><span>01 / POLICY</span><h3>.veritasignore</h3></div><small>{statusLabel}</small></div>
-            <textarea className="rule-editor" spellCheck={false} value={rules} readOnly={!editable} onChange={(event) => { setRules(event.target.value); setPreview(null); setConfirmRisk(false); setApplySource("manual"); }} placeholder={busy === "load" ? "读取中…" : "# 每行一条规则\n*.log\nbuild/\n!build/keep.txt"} />
+            <textarea aria-label="忽略规则内容" className="rule-editor" spellCheck={false} value={rules} readOnly={!editable} onChange={(event) => { setRules(event.target.value); setPreview(null); setConfirmRisk(false); setApplySource("manual"); }} placeholder={busy === "load" ? "读取中…" : "# 每行一条规则\n*.log\nbuild/\n!build/keep.txt"} />
             <div className="syntax-strip"><span><code>**</code> 任意层级</span><span><code>/</code> 根目录锚定</span><span><code>!</code> 重新包含</span><span>最大 128 条 / 16 KiB</span></div>
           </section>
 

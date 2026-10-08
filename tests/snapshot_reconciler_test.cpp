@@ -50,3 +50,28 @@ VSYNC_TEST(SnapshotReconcilerWritesNewVersionsMetadataAndTombstonesAtomically) {
   std::filesystem::remove(path.string() + "-shm");
   std::filesystem::remove(path.string() + "-wal");
 }
+
+VSYNC_TEST(SnapshotReconcilerMaintainsBidirectionalAncestryAcrossAutomaticScans) {
+  const auto path = std::filesystem::temp_directory_path() / ("veritassync-causal-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+  {
+    using namespace veritassync;
+    storage::Database database(path);
+    database.ApplyMigrations();
+    database.CreateTask({"peer", "bidirectional", "peer", "C:/sync"});
+    int counter = 0;
+    sync::SnapshotReconciler reconcile([&] { return "v" + std::to_string(++counter); });
+    (void)reconcile.Apply(database, {File("a.txt", 1, 1)}, {"peer", "a", 0, 100});
+    const auto first = *database.FindFileRecord("peer", "a.txt");
+    VSYNC_CHECK(first.logical_clock == 1);
+    (void)reconcile.Apply(database, {File("a.txt", 2, 2)}, {"peer", "a", 0, 200});
+    const auto second = *database.FindFileRecord("peer", "a.txt");
+    VSYNC_CHECK(second.logical_clock > first.logical_clock);
+    VSYNC_CHECK(database.IsVersionAncestor("peer", first.version_id, second.version_id));
+    (void)reconcile.Apply(database, {}, {"peer", "a", 0, 300});
+    const auto deleted = *database.FindFileRecord("peer", "a.txt");
+    VSYNC_CHECK(deleted.kind == storage::FileKind::kTombstone);
+    VSYNC_CHECK(database.IsVersionAncestor("peer", second.version_id, deleted.version_id));
+  }
+  std::filesystem::remove(path);
+}

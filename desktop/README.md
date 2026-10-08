@@ -42,6 +42,19 @@ the UI never reads the SQLite database or sync roots directly.
 - `store` persists desktop-only preferences such as the notification toggle.
 - `log` writes desktop-shell and frontend diagnostics outside the sync database.
 
+Settings also expose opt-in Windows login startup. The shell writes only its own
+HKCU Run entry when the user changes the toggle, and `--background` starts it hidden
+with its tray available. Normal launches remain visible. The home screen reads
+actual task connection state and displays engine-reported per-session transfer
+totals, rates, download progress, pending files, and queued bytes; it does not
+claim readiness from a fixed label.
+
+Production keeps its existing identity, named pipe and startup entry. Separately
+packaged beta/audit identifiers use their own identity target, pipe and startup
+value. Engine `--identity-target` also allows isolated single-machine native tests.
+When a Debug engine is running, staging for Release can use
+`-SkipDevelopmentResources` to avoid overwriting its loaded executable/DLLs.
+
 The main window uses a self-drawn title bar on Windows, including drag,
 minimize, maximize, and close controls. Desktop preferences default to dark
 mode and persist a dark/light/system choice; the selected mode is also passed

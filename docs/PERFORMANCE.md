@@ -61,7 +61,7 @@ it without a device-aware I/O policy can make HDD and busy-system behavior worse
 - Windows packaging now explicitly builds, tests, and stages the Release C++
   sidecar. Previously the generic Debug preset path could place an unoptimized
   engine inside an otherwise Release Tauri bundle.
-- Tauri's frontend hooks now run pnpm against the actual `desktop/ui` workspace;
+- Tauri's frontend hooks now run pnpm from the CLI-detected `desktop/ui` workspace;
   the former working-directory mismatch prevented an integrated Release build.
 - The Rust desktop Release profile uses size optimization, ThinLTO, one codegen
   unit, abort-on-panic, and symbol stripping. On the audit machine this reduced

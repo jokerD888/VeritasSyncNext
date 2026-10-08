@@ -1,7 +1,11 @@
 #include "veritassync_webrtc_bridge.h"
 
 #include <memory>
+#include <atomic>
+#include <winsock2.h>
+#include <Windows.h>
 #include <mutex>
+#include <span>
 #include <string>
 
 #include "api/create_modular_peer_connection_factory.h"
@@ -12,6 +16,7 @@
 #include "api/make_ref_counted.h"
 #include "api/peer_connection_interface.h"
 #include "rtc_base/ssl_adapter.h"
+#include "rtc_base/logging.h"
 #include "rtc_base/thread.h"
 
 namespace {
@@ -31,11 +36,20 @@ class PeerObserver final : public webrtc::PeerConnectionObserver {
 class FactoryHolder final {
  public:
   FactoryHolder() : peer_observer_(*this) {
+    WSADATA winsock{};
+    if (WSAStartup(MAKEWORD(2, 2), &winsock) != 0) return;
+    winsock_started_ = true;
+    wchar_t diagnostics[2]{};
+    if (GetEnvironmentVariableW(L"VERITASSYNC_WEBRTC_DIAGNOSTICS", diagnostics, 2) == 1 && diagnostics[0] == L'1') {
+      webrtc::LogMessage::LogToDebug(webrtc::LS_INFO);
+      webrtc::LogMessage::SetLogToStderr(true);
+    }
     if (!webrtc::InitializeSSL()) return;
     network_thread_ = webrtc::Thread::CreateWithSocketServer();
     worker_thread_ = webrtc::Thread::Create();
     signaling_thread_ = webrtc::Thread::Create();
     if (!network_thread_->Start() || !worker_thread_->Start() || !signaling_thread_->Start()) return;
+    signaling_started_ = true;
 
     webrtc::PeerConnectionFactoryDependencies dependencies;
     dependencies.env = webrtc::CreateEnvironment();
@@ -44,9 +58,33 @@ class FactoryHolder final {
     dependencies.signaling_thread = signaling_thread_.get();
     webrtc::EnableMediaWithDefaults(dependencies);
     factory_ = webrtc::CreateModularPeerConnectionFactory(std::move(dependencies));
+    // Opt-in diagnostic mode for two peers on a host with a VPN/virtual adapter.
+    // Production defaults keep libwebrtc's normal loopback-interface exclusion.
+    wchar_t allow_loopback[2]{};
+    if (factory_ && GetEnvironmentVariableW(L"VERITASSYNC_WEBRTC_ALLOW_LOOPBACK", allow_loopback, 2) == 1 &&
+        allow_loopback[0] == L'1') {
+      webrtc::PeerConnectionFactoryInterface::Options options;
+      options.network_ignore_mask = 0;
+      factory_->SetOptions(options);
+    }
   }
 
   [[nodiscard]] bool Ready() const { return factory_ != nullptr; }
+  bool ConfigureIce(const VsyncWebRtcIceServer* servers, uint32_t count, bool relay_only) {
+    if (peer_connection_ != nullptr || count > 16 || (count > 0 && servers == nullptr)) return false;
+    configuration_.servers.clear();
+    const std::span<const VsyncWebRtcIceServer> inputs(servers, count);
+    for (const auto& input : inputs) {
+      if (input.url == nullptr || input.username == nullptr || input.credential == nullptr) return false;
+      webrtc::PeerConnectionInterface::IceServer server;
+      server.urls.push_back(input.url);
+      server.username = input.username;
+      server.password = input.credential;
+      configuration_.servers.push_back(std::move(server));
+    }
+    configuration_.type = relay_only ? webrtc::PeerConnectionInterface::kRelay : webrtc::PeerConnectionInterface::kAll;
+    return true;
+  }
 
   [[nodiscard]] bool CreateProtocolChannels() {
     if (!CreatePeerConnection() || control_channel_ != nullptr || bulk_channel_ != nullptr) return false;
@@ -69,10 +107,9 @@ class FactoryHolder final {
   [[nodiscard]] bool CreatePeerConnection() {
     if (!Ready()) return false;
     if (peer_connection_ != nullptr) return true;
-    webrtc::PeerConnectionInterface::RTCConfiguration configuration;
-    configuration.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
+    configuration_.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
     auto peer_connection = factory_->CreatePeerConnectionOrError(
-        configuration, webrtc::PeerConnectionDependencies(&peer_observer_));
+        configuration_, webrtc::PeerConnectionDependencies(&peer_observer_));
     if (!peer_connection.ok()) return false;
     peer_connection_ = peer_connection.MoveValue();
     return true;
@@ -104,45 +141,67 @@ class FactoryHolder final {
     remote_description_context_ = context;
   }
 
-  [[nodiscard]] bool CreateOffer();
+  [[nodiscard]] bool CreateOffer(bool restart = false);
   [[nodiscard]] bool ApplyRemoteOffer(const char* sdp, uint32_t length);
   [[nodiscard]] bool ApplyRemoteAnswer(const char* sdp, uint32_t length);
   [[nodiscard]] bool ApplyRemoteIceCandidate(const char* mid, uint32_t mid_length,
                                               int32_t mline_index, const char* candidate,
                                               uint32_t candidate_length);
   [[nodiscard]] bool SendControl(const uint8_t* bytes, uint32_t length) {
-    if (control_channel_ == nullptr || bytes == nullptr || length == 0) return false;
-    return control_channel_->Send(webrtc::DataBuffer(webrtc::CopyOnWriteBuffer(bytes, length), true));
+    if (bytes == nullptr || length == 0) return false;
+    return signaling_thread_->BlockingCall([this, bytes, length] {
+      return !closing_ && control_channel_ != nullptr &&
+          control_channel_->Send(webrtc::DataBuffer(webrtc::CopyOnWriteBuffer(bytes, length), true));
+    });
   }
   [[nodiscard]] bool SendBulk(const uint8_t* bytes, uint32_t length) {
-    if (bulk_channel_ == nullptr || bytes == nullptr || length == 0) return false;
-    return bulk_channel_->Send(webrtc::DataBuffer(webrtc::CopyOnWriteBuffer(bytes, length), true));
+    if (bytes == nullptr || length == 0) return false;
+    return signaling_thread_->BlockingCall([this, bytes, length] {
+      return !closing_ && bulk_channel_ != nullptr &&
+          bulk_channel_->Send(webrtc::DataBuffer(webrtc::CopyOnWriteBuffer(bytes, length), true));
+    });
   }
   [[nodiscard]] uint32_t ControlChannelState() const {
-    if (control_channel_ == nullptr) return 0;
-    return static_cast<uint32_t>(control_channel_->state()) + 1U;
+    return signaling_thread_->BlockingCall([this] {
+      return control_channel_ == nullptr ? 0U : static_cast<uint32_t>(control_channel_->state()) + 1U;
+    });
   }
   [[nodiscard]] uint32_t ConnectionState() const {
-    if (peer_connection_ == nullptr) return 0;
-    return static_cast<uint32_t>(peer_connection_->peer_connection_state()) + 1U;
+    return signaling_thread_->BlockingCall([this] {
+      return peer_connection_ == nullptr ? 0U : static_cast<uint32_t>(peer_connection_->peer_connection_state()) + 1U;
+    });
   }
   [[nodiscard]] bool IsReady() const {
-    return peer_connection_ != nullptr &&
+    return signaling_thread_->BlockingCall([this] { return peer_connection_ != nullptr &&
            peer_connection_->peer_connection_state() == webrtc::PeerConnectionInterface::PeerConnectionState::kConnected &&
            control_channel_ != nullptr && control_channel_->state() == webrtc::DataChannelInterface::kOpen &&
-           bulk_channel_ != nullptr && bulk_channel_->state() == webrtc::DataChannelInterface::kOpen;
+           bulk_channel_ != nullptr && bulk_channel_->state() == webrtc::DataChannelInterface::kOpen; });
   }
   [[nodiscard]] uint64_t ControlBufferedAmount() const {
-    return control_channel_ == nullptr ? 0U : control_channel_->buffered_amount();
+    return signaling_thread_->BlockingCall([this] { return control_channel_ == nullptr ? uint64_t{0} : control_channel_->buffered_amount(); });
   }
   [[nodiscard]] uint64_t BulkBufferedAmount() const {
-    return bulk_channel_ == nullptr ? 0U : bulk_channel_->buffered_amount();
+    return signaling_thread_->BlockingCall([this] { return bulk_channel_ == nullptr ? uint64_t{0} : bulk_channel_->buffered_amount(); });
   }
 
   ~FactoryHolder() {
-    if (control_channel_ != nullptr) control_channel_->UnregisterObserver();
-    if (bulk_channel_ != nullptr) bulk_channel_->UnregisterObserver();
-    if (peer_connection_ != nullptr) peer_connection_->Close();
+    closing_ = true;
+    if (signaling_started_) {
+      signaling_thread_->BlockingCall([this] {
+        if (control_channel_ != nullptr) control_channel_->UnregisterObserver();
+        if (bulk_channel_ != nullptr) bulk_channel_->UnregisterObserver();
+        if (peer_connection_ != nullptr) peer_connection_->Close();
+        control_channel_ = nullptr;
+        bulk_channel_ = nullptr;
+        peer_connection_ = nullptr;
+        factory_ = nullptr;
+      });
+    }
+    // Quiesce native callbacks while the holder's mutex and observers still exist.
+    if (network_thread_) network_thread_->Stop();
+    if (worker_thread_) worker_thread_->Stop();
+    if (signaling_thread_) signaling_thread_->Stop();
+    if (winsock_started_) WSACleanup();
   }
 
  private:
@@ -179,6 +238,7 @@ class FactoryHolder final {
    public:
     DescriptionObserver(FactoryHolder& owner, bool offer) : owner_(owner), offer_(offer) {}
     void OnSuccess(webrtc::SessionDescriptionInterface* description) override {
+      if (owner_.closing_) { delete description; return; }
       std::string sdp;
       description->ToString(&sdp);
       owner_.peer_connection_->SetLocalDescription(
@@ -195,6 +255,7 @@ class FactoryHolder final {
    public:
     explicit RemoteOfferObserver(FactoryHolder& owner) : owner_(owner) {}
     void OnSetRemoteDescriptionComplete(webrtc::RTCError error) override {
+      if (owner_.closing_) return;
       owner_.EmitRemoteDescriptionComplete(error.ok());
       if (error.ok()) owner_.CreateAnswer();
     }
@@ -206,6 +267,7 @@ class FactoryHolder final {
    public:
     explicit RemoteAnswerObserver(FactoryHolder& owner) : owner_(owner) {}
     void OnSetRemoteDescriptionComplete(webrtc::RTCError error) override {
+      if (owner_.closing_) return;
       owner_.EmitRemoteDescriptionComplete(error.ok());
     }
    private:
@@ -213,10 +275,12 @@ class FactoryHolder final {
   };
 
   void EmitOffer(const std::string& sdp) {
+    if (closing_) return;
     std::scoped_lock lock(callback_mutex_);
     if (offer_callback_ != nullptr) offer_callback_(offer_context_, sdp.data(), static_cast<uint32_t>(sdp.size()));
   }
   void EmitAnswer(const std::string& sdp) {
+    if (closing_) return;
     std::scoped_lock lock(callback_mutex_);
     if (answer_callback_ != nullptr) answer_callback_(answer_context_, sdp.data(), static_cast<uint32_t>(sdp.size()));
   }
@@ -271,14 +335,19 @@ class FactoryHolder final {
     else if (channel->label() == "bulk-v1" && bulk_channel_ == nullptr) AttachBulkChannel(std::move(channel));
   }
   void CreateAnswer() {
+    if (closing_ || peer_connection_ == nullptr) return;
     peer_connection_->CreateAnswer(webrtc::make_ref_counted<DescriptionObserver>(*this, false).get(),
                                    webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
   }
 
   std::unique_ptr<webrtc::Thread> network_thread_;
+  bool winsock_started_ = false;
+  bool signaling_started_ = false;
+  std::atomic_bool closing_{false};
   std::unique_ptr<webrtc::Thread> worker_thread_;
   std::unique_ptr<webrtc::Thread> signaling_thread_;
   webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory_;
+  webrtc::PeerConnectionInterface::RTCConfiguration configuration_;
   PeerObserver peer_observer_;
   webrtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
   webrtc::scoped_refptr<webrtc::DataChannelInterface> control_channel_;
@@ -306,10 +375,12 @@ void PeerObserver::OnIceCandidate(const webrtc::IceCandidate* candidate) {
   if (candidate != nullptr) owner_.EmitIceCandidate(*candidate);
 }
 
-bool FactoryHolder::CreateOffer() {
+bool FactoryHolder::CreateOffer(bool restart) {
   if (peer_connection_ == nullptr) return false;
+  webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
+  options.ice_restart = restart;
   peer_connection_->CreateOffer(webrtc::make_ref_counted<DescriptionObserver>(*this, true).get(),
-                                webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
+                                options);
   return true;
 }
 
@@ -344,6 +415,13 @@ bool FactoryHolder::ApplyRemoteIceCandidate(const char* mid, uint32_t mid_length
 
 extern "C" uint32_t VeritasSyncWebRtcBridgeAbiVersion(void) {
   return VSYNC_WEBRTC_BRIDGE_ABI_VERSION;
+}
+extern "C" uint32_t VeritasSyncWebRtcBridgeConfigureIce(
+    void* factory, const VsyncWebRtcIceServer* servers, uint32_t count, uint32_t relay_only) {
+  return factory != nullptr && static_cast<FactoryHolder*>(factory)->ConfigureIce(servers, count, relay_only != 0) ? 1U : 0U;
+}
+extern "C" uint32_t VeritasSyncWebRtcBridgeRestartIce(void* factory) {
+  return factory != nullptr && static_cast<FactoryHolder*>(factory)->CreateOffer(true) ? 1U : 0U;
 }
 
 extern "C" uint64_t VeritasSyncWebRtcBridgeMaxQueuedBytes(void) {

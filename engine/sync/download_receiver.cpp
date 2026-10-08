@@ -15,8 +15,16 @@ DownloadReceiver::DownloadReceiver(storage::Database& database, const storage::T
     : database_(database), transfer_id_(transfer_id), writer_(writer), relative_path_(std::move(relative_path)),
       expected_size_(expected_size), expected_hash_(expected_hash), chunk_count_(chunk_count) {
   if (relative_path_.empty() || chunk_count_ == 0) throw std::invalid_argument("download metadata is invalid");
+  if (expected_size_ / protocol::kLogicalChunkSize + (expected_size_ % protocol::kLogicalChunkSize != 0 ? 1U : 0U) != chunk_count_)
+    throw std::invalid_argument("download chunk count does not match size");
+  accepted_.resize(static_cast<std::size_t>(chunk_count_));
+  for (const auto index : database_.CompletedTransferChunks(transfer_id_)) {
+    if (index >= chunk_count_) throw std::runtime_error("durable chunk index is out of range");
+    accepted_[static_cast<std::size_t>(index)] = true;
+    received_bytes_ += (std::min<std::uint64_t>)(protocol::kLogicalChunkSize, expected_size_ - index * protocol::kLogicalChunkSize);
+  }
 }
-void DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::uint64_t offset,
+bool DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::uint64_t offset,
                                    const std::span<const std::uint8_t> bytes, const common::ContentHash& chunk_hash,
                                    const std::int64_t updated_at_ms, const bool persist) {
   if (cancelled_) throw std::logic_error("download is cancelled");
@@ -26,8 +34,12 @@ void DownloadReceiver::AcceptChunk(const std::uint64_t chunk_index, const std::u
   if (chunk_index >= chunk_count_ || offset != expected_offset || bytes.size() != expected_length || common::Blake3(bytes) != chunk_hash) {
     throw std::invalid_argument("download chunk is invalid");
   }
+  if (accepted_[static_cast<std::size_t>(chunk_index)]) return false;
   writer_.WritePartialChunk(relative_path_, offset, bytes, persist);
   if (persist) database_.MarkTransferChunkCompleted(transfer_id_, chunk_index, updated_at_ms);
+  accepted_[static_cast<std::size_t>(chunk_index)] = true;
+  received_bytes_ += bytes.size();
+  return true;
 }
 void DownloadReceiver::PersistAcceptedChunks(const std::span<const std::uint64_t> chunk_indices,
                                              const std::int64_t updated_at_ms) {

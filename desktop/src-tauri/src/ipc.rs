@@ -50,11 +50,11 @@ extern "system" {
 }
 
 fn escape(value: &str) -> String {
-    value.bytes().fold(String::new(), |mut output, byte| {
-        if matches!(byte, b'%' | b'\t' | b'\r' | b'\n') {
-            output.push_str(&format!("%{byte:02X}"));
+    value.chars().fold(String::new(), |mut output, character| {
+        if matches!(character, '%' | '\t' | '\r' | '\n') {
+            output.push_str(&format!("%{:02X}", character as u32));
         } else {
-            output.push(byte as char);
+            output.push(character);
         }
         output
     })
@@ -191,5 +191,10 @@ mod tests {
         assert_eq!(unescape("line%0Avalue%09x").unwrap(), "line\nvalue\tx");
         assert!(unescape("bad%0").is_err());
         assert!(unescape("bad%XZ").is_err());
+    }
+    #[test]
+    fn preserves_unicode_paths_when_escaping_requests() {
+        let value = "D:\\同步\\照片🙂\tline%\n";
+        assert_eq!(unescape(&escape(value)).unwrap(), value);
     }
 }

@@ -7,7 +7,7 @@ namespace veritassync::transport {
 
 class WebRtcBridgeLoader {
  public:
-  static constexpr std::uint32_t kExpectedAbiVersion = 1;
+  static constexpr std::uint32_t kExpectedAbiVersion = 2;
 
   [[nodiscard]] static std::uint64_t VerifyAndReadMaxQueuedBytes(
       const std::filesystem::path& library_path);
